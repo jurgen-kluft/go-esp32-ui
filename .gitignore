@@ -1,74 +1,39 @@
-# Prerequisites
-*.d
+#ignore all files
+*
+!*/
 
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
-
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
-
-# Kernel Module Compile Results
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
-
-cimgui/build
-cimgui/.DS_Store
-.DS_Store
-
-cmd/codegen/codegen
-examples/example
-.ccls-cache
-thirdparty/glfw/build
-/cmd/codegen/build/
-
-.clang-format
-
-## editors
-# GoLand/CLion
+target/
+tags/
 .idea
-# Vim cache files
-*.swp
 
-# make update temporary directory
-tmp
+#except the following files
+!.gitignore
+!.clang-format
+!*.cpp
+!*.hpp
+!*.c
+!*.h
+!*.inl
 
-# make setup codegen build
-/codegen
+!*.zig
+
+!*.go
+
+!*.cs
+!*.csproj
+!*.resx
+
+!*.hlsl
+!*.fragment
+
+!*.md
+!*.png
+!*.jpg
+!*.txt
+!*.html
+
+!*.ini
+!*.bat
+
+#except do ignore the following files
+CMakeLists.txt
