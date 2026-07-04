@@ -1,8 +1,8 @@
 package pages
 
-import (
-	. "github.com/jurgen-kluft/go-esp32-ui/ui"
-)
+// import (
+// 	. "github.com/jurgen-kluft/go-esp32-ui/ui"
+// )
 
 type LightStatus struct {
 	OnOff      int8
