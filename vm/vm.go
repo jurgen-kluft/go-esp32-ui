@@ -3,12 +3,23 @@ package vm
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
+)
+
+const (
+	TypeVariableU8  uint8 = 1
+	TypeVariableU16 uint8 = 2
+	TypeVariableU32 uint8 = 3
+	TypeVariableS8  uint8 = 4
+	TypeVariableS16 uint8 = 5
+	TypeVariableS32 uint8 = 6
+	TypeVariableF32 uint8 = 7
 )
 
 // VMBlock represents the loaded executable chunks inside the VM
 type VMBlock struct {
 	ID         uint32
-	LocalCount uint8
+	LocalCount uint32
 	Bytes      []byte
 }
 
@@ -19,45 +30,186 @@ type CallFrame struct {
 	FramePointer uint32 // Index in the data stack where this block's locals begin
 }
 
-type VirtualMachine struct {
+type VM struct {
 	Blocks      map[uint32]VMBlock
 	GlobalState map[uint32]uint32 // Predefined shared external variables
 
 	// Evaluation and Storage Stack
-	DataStack []uint32
+	DataStack []Value
 
 	// Frame Call Stack
 	CallStack    []CallFrame
 	CurrentFrame CallFrame
 
-	// Simulated Hardware State
-	LightsOn map[uint32]uint32
+	SysCalls VmSystemInterface
 }
 
-func NewVirtualMachine() *VirtualMachine {
-	return &VirtualMachine{
+func NewVirtualMachine(systemCalls VmSystemInterface) *VM {
+	return &VM{
 		Blocks:      make(map[uint32]VMBlock),
 		GlobalState: make(map[uint32]uint32),
-		DataStack:   make([]uint32, 0, 256),
+		DataStack:   make([]Value, 0, 256),
 		CallStack:   make([]CallFrame, 0, 16),
-		LightsOn:    make(map[uint32]uint32),
+		SysCalls:    systemCalls,
 	}
 }
 
-func (vm *VirtualMachine) ExecuteBlock(blockID uint32) {
+func valueKindFromConstType(constType ConstType) ValueKind {
+	switch constType {
+	case ConstTypeS8, ConstTypeS16, ConstTypeS32:
+		return ValueKindS32
+	case ConstTypeF32:
+		return ValueKindF32
+	default:
+		return ValueKindU32
+	}
+}
+
+func valueKindFromStorageType(storageType uint8) ValueKind {
+	switch storageType {
+	case TypeVariableS8, TypeVariableS16, TypeVariableS32:
+		return ValueKindS32
+	case TypeVariableF32:
+		return ValueKindF32
+	default:
+		return ValueKindU32
+	}
+}
+
+func (vm *VM) pushValue(value Value) {
+	vm.DataStack = append(vm.DataStack, value)
+}
+
+func (vm *VM) popValue() Value {
+	topIdx := len(vm.DataStack) - 1
+	value := vm.DataStack[topIdx]
+	vm.DataStack = vm.DataStack[:topIdx]
+	return value
+}
+
+func (vm *VM) pushStoredValue(storageType uint8, bits uint32) {
+	vm.pushValue(Value{Kind: valueKindFromStorageType(storageType), Bits: bits})
+}
+
+func (vm *VM) binaryResultKind(left, right Value) ValueKind {
+	if left.Kind == ValueKindF32 || right.Kind == ValueKindF32 {
+		return ValueKindF32
+	}
+	if left.Kind == ValueKindS32 || right.Kind == ValueKindS32 {
+		return ValueKindS32
+	}
+	return ValueKindU32
+}
+
+func (vm *VM) comparisonResult(ok bool) Value {
+	if ok {
+		return Value{Kind: ValueKindU32, Bits: 1}
+	}
+	return Value{Kind: ValueKindU32, Bits: 0}
+}
+
+func (vm *VM) applyBinaryOp(opType BinaryOpType, left, right Value) Value {
+	resultKind := vm.binaryResultKind(left, right)
+
+	switch opType {
+	case OpAdd:
+		switch resultKind {
+		case ValueKindF32:
+			return Value{Kind: ValueKindF32, Bits: math.Float32bits(left.AsFloat32() + right.AsFloat32())}
+		case ValueKindS32:
+			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() + right.AsInt32())}
+		default:
+			return Value{Kind: ValueKindU32, Bits: left.AsUint32() + right.AsUint32()}
+		}
+	case OpSub:
+		switch resultKind {
+		case ValueKindF32:
+			return Value{Kind: ValueKindF32, Bits: math.Float32bits(left.AsFloat32() - right.AsFloat32())}
+		case ValueKindS32:
+			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() - right.AsInt32())}
+		default:
+			return Value{Kind: ValueKindU32, Bits: left.AsUint32() - right.AsUint32()}
+		}
+	case OpMul:
+		switch resultKind {
+		case ValueKindF32:
+			return Value{Kind: ValueKindF32, Bits: math.Float32bits(left.AsFloat32() * right.AsFloat32())}
+		case ValueKindS32:
+			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() * right.AsInt32())}
+		default:
+			return Value{Kind: ValueKindU32, Bits: left.AsUint32() * right.AsUint32()}
+		}
+	case OpEQ:
+		switch resultKind {
+		case ValueKindF32:
+			return vm.comparisonResult(left.AsFloat32() == right.AsFloat32())
+		case ValueKindS32:
+			return vm.comparisonResult(left.AsInt32() == right.AsInt32())
+		default:
+			return vm.comparisonResult(left.AsUint32() == right.AsUint32())
+		}
+	case OpG:
+		switch resultKind {
+		case ValueKindF32:
+			return vm.comparisonResult(left.AsFloat32() > right.AsFloat32())
+		case ValueKindS32:
+			return vm.comparisonResult(left.AsInt32() > right.AsInt32())
+		default:
+			return vm.comparisonResult(left.AsUint32() > right.AsUint32())
+		}
+	case OpGE:
+		switch resultKind {
+		case ValueKindF32:
+			return vm.comparisonResult(left.AsFloat32() >= right.AsFloat32())
+		case ValueKindS32:
+			return vm.comparisonResult(left.AsInt32() >= right.AsInt32())
+		default:
+			return vm.comparisonResult(left.AsUint32() >= right.AsUint32())
+		}
+	case OpL:
+		switch resultKind {
+		case ValueKindF32:
+			return vm.comparisonResult(left.AsFloat32() < right.AsFloat32())
+		case ValueKindS32:
+			return vm.comparisonResult(left.AsInt32() < right.AsInt32())
+		default:
+			return vm.comparisonResult(left.AsUint32() < right.AsUint32())
+		}
+	case OpLE:
+		switch resultKind {
+		case ValueKindF32:
+			return vm.comparisonResult(left.AsFloat32() <= right.AsFloat32())
+		case ValueKindS32:
+			return vm.comparisonResult(left.AsInt32() <= right.AsInt32())
+		default:
+			return vm.comparisonResult(left.AsUint32() <= right.AsUint32())
+		}
+	default:
+		return Value{Kind: ValueKindU32, Bits: 0}
+	}
+}
+
+func (vm *VM) ExecuteBlock(blockID uint32) {
+	vm.CurrentFrame = vm.allocateFrame(blockID)
+	vm.executeCurrentFrame()
+}
+
+func (vm *VM) allocateFrame(blockID uint32) CallFrame {
 	// Setup the initial root call frame
 	block := vm.Blocks[blockID]
 	fp := uint32(len(vm.DataStack))
 
 	// Allocate blank padding spaces on the data stack for local variables
-	for i := uint8(0); i < block.LocalCount; i++ {
-		vm.DataStack = append(vm.DataStack, 0)
+	for i := uint32(0); i < block.LocalCount; i++ {
+		vm.pushValue(Value{Kind: ValueKindU32, Bits: 0})
 	}
 
-	vm.CurrentFrame = CallFrame{BlockID: blockID, PC: 0, FramePointer: fp}
+	return CallFrame{BlockID: blockID, PC: 0, FramePointer: fp}
+}
 
+func (vm *VM) executeCurrentFrame() {
 	for {
-		block = vm.Blocks[vm.CurrentFrame.BlockID]
+		block := vm.Blocks[vm.CurrentFrame.BlockID]
 		if vm.CurrentFrame.PC >= uint32(len(block.Bytes)) {
 			fmt.Println("VM Error: Program Counter ran out of bounds")
 			return
@@ -67,91 +219,66 @@ func (vm *VirtualMachine) ExecuteBlock(blockID uint32) {
 		vm.CurrentFrame.PC++
 
 		switch op {
-		case OpPushConstU8:
-			val := uint32(block.Bytes[vm.CurrentFrame.PC])
+		case OpPushConst:
+			constType := ConstType(block.Bytes[vm.CurrentFrame.PC])
 			vm.CurrentFrame.PC++
-			vm.DataStack = append(vm.DataStack, val)
 
-		case OpPushConstU32:
-			val := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
-			vm.CurrentFrame.PC += 4
-			vm.DataStack = append(vm.DataStack, val)
+			var val uint32
+			switch constType {
+			case ConstTypeU8:
+				val = uint32(block.Bytes[vm.CurrentFrame.PC])
+				vm.CurrentFrame.PC++
+			case ConstTypeU16:
+				val = uint32(binary.LittleEndian.Uint16(block.Bytes[vm.CurrentFrame.PC:]))
+				vm.CurrentFrame.PC += 2
+			case ConstTypeU32:
+				val = binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
+				vm.CurrentFrame.PC += 4
+			case ConstTypeS8:
+				val = uint32(int32(int8(block.Bytes[vm.CurrentFrame.PC])))
+				vm.CurrentFrame.PC++
+			case ConstTypeS16:
+				val = uint32(int32(int16(binary.LittleEndian.Uint16(block.Bytes[vm.CurrentFrame.PC:]))))
+				vm.CurrentFrame.PC += 2
+			case ConstTypeS32, ConstTypeF32:
+				val = binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
+				vm.CurrentFrame.PC += 4
+			default:
+				fmt.Printf("VM Error: Unknown ConstType %d\n", constType)
+				return
+			}
+			vm.pushValue(Value{Kind: valueKindFromConstType(constType), Bits: val})
 
 		case OpPushVar:
 			varID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
-			vm.DataStack = append(vm.DataStack, vm.GlobalState[varID])
+			vm.pushStoredValue(NewID(varID).Type, vm.GlobalState[varID])
 
 		case OpPopVar:
 			varID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
-			topIdx := len(vm.DataStack) - 1
-			val := vm.DataStack[topIdx]
-			vm.DataStack = vm.DataStack[:topIdx] // Pop
-			vm.GlobalState[varID] = val
+			val := vm.popValue()
+			vm.GlobalState[varID] = val.Bits
 
 		case OpGetLocal:
-			localIdx := uint32(block.Bytes[vm.CurrentFrame.PC])
-			vm.CurrentFrame.PC++
-			val := vm.DataStack[vm.CurrentFrame.FramePointer+localIdx]
-			vm.DataStack = append(vm.DataStack, val)
+			localID := NewID(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))
+			vm.CurrentFrame.PC += 4
+			val := vm.DataStack[vm.CurrentFrame.FramePointer+localID.Idx]
+			vm.pushValue(val)
 
 		case OpSetLocal:
-			localIdx := uint32(block.Bytes[vm.CurrentFrame.PC])
-			vm.CurrentFrame.PC++
-			topIdx := len(vm.DataStack) - 1
-			val := vm.DataStack[topIdx]
-			vm.DataStack = vm.DataStack[:topIdx] // Pop
-			vm.DataStack[vm.CurrentFrame.FramePointer+localIdx] = val
+			localID := NewID(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))
+			vm.CurrentFrame.PC += 4
+			val := vm.popValue()
+			vm.DataStack[vm.CurrentFrame.FramePointer+localID.Idx] = val
 
 		case OpBinaryOp:
 			opType := BinaryOpType(block.Bytes[vm.CurrentFrame.PC])
 			vm.CurrentFrame.PC++
 
-			rIdx := len(vm.DataStack) - 1
-			lIdx := len(vm.DataStack) - 2
-			left := vm.DataStack[lIdx]
-			right := vm.DataStack[rIdx]
-			vm.DataStack = vm.DataStack[:lIdx] // Pop both
-
-			var result uint32
-			switch opType {
-			case OpAdd:
-				result = left + right
-			case OpSub:
-				result = left - right
-			case OpEqual:
-				if left == right {
-					result = 1
-				} else {
-					result = 0
-				}
-			case OpG:
-				if left > right {
-					result = 1
-				} else {
-					result = 0
-				}
-			case OpGE:
-				if left >= right {
-					result = 1
-				} else {
-					result = 0
-				}
-			case OpL:
-				if left < right {
-					result = 1
-				} else {
-					result = 0
-				}
-			case OpLE:
-				if left <= right {
-					result = 1
-				} else {
-					result = 0
-				}
-			}
-			vm.DataStack = append(vm.DataStack, result)
+			right := vm.popValue()
+			left := vm.popValue()
+			vm.pushValue(vm.applyBinaryOp(opType, left, right))
 
 		case OpIf:
 			condBlockID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
@@ -165,35 +292,22 @@ func (vm *VirtualMachine) ExecuteBlock(blockID uint32) {
 			vm.CallStack = append(vm.CallStack, vm.CurrentFrame)
 
 			// 2. Prepare and run the condition block
-			cBlock := vm.Blocks[condBlockID]
-			cfp := uint32(len(vm.DataStack))
-			for i := uint8(0); i < cBlock.LocalCount; i++ {
-				vm.DataStack = append(vm.DataStack, 0)
-			}
-
-			vm.CurrentFrame = CallFrame{BlockID: condBlockID, PC: 0, FramePointer: cfp}
+			vm.CurrentFrame = vm.allocateFrame(condBlockID)
 
 			// Execute sub-loop synchronously until the condition block hits OpReturn
 			vm.executeSubLoop()
 
 			// 3. Capture the condition boolean left on the top of the stack
-			topIdx := len(vm.DataStack) - 1
-			condResult := vm.DataStack[topIdx]
-			vm.DataStack = vm.DataStack[:topIdx] // Pop result
+			condResult := vm.popValue()
 
 			// 4. Choose which structural body execution pipeline block to execute next
 			targetBlockID := falseBlockID
-			if condResult != 0 {
+			if condResult.Bits != 0 {
 				targetBlockID = trueBlockID
 			}
 
-			tBlock := vm.Blocks[targetBlockID]
-			tfp := uint32(len(vm.DataStack))
-			for i := uint8(0); i < tBlock.LocalCount; i++ {
-				vm.DataStack = append(vm.DataStack, 0)
-			}
-
-			vm.CurrentFrame = CallFrame{BlockID: targetBlockID, PC: 0, FramePointer: tfp}
+			vm.CallStack = append(vm.CallStack, vm.CurrentFrame)
+			vm.CurrentFrame = vm.allocateFrame(targetBlockID)
 			vm.executeSubLoop()
 
 		case OpSyscall:
@@ -209,11 +323,9 @@ func (vm *VirtualMachine) ExecuteBlock(blockID uint32) {
 			vm.CurrentFrame.PC++
 
 			// Extract returned values sitting on the very top of the stack frame
-			retValues := make([]uint32, returnCount)
+			retValues := make([]Value, returnCount)
 			for i := int(returnCount) - 1; i >= 0; i-- {
-				topIdx := len(vm.DataStack) - 1
-				retValues[i] = vm.DataStack[topIdx]
-				vm.DataStack = vm.DataStack[:topIdx]
+				retValues[i] = vm.popValue()
 			}
 
 			// Clear out the entire local variable space allocated to this frame pointer context
@@ -221,7 +333,7 @@ func (vm *VirtualMachine) ExecuteBlock(blockID uint32) {
 
 			// Push returned values back onto parent stack frame area
 			for _, val := range retValues {
-				vm.DataStack = append(vm.DataStack, val)
+				vm.pushValue(val)
 			}
 			return
 		}
@@ -229,43 +341,83 @@ func (vm *VirtualMachine) ExecuteBlock(blockID uint32) {
 }
 
 // Inline helper loop to safely step over branching frames nested in execution structures
-func (vm *VirtualMachine) executeSubLoop() {
-	frameStartDepth := len(vm.CallStack)
-	vm.ExecuteBlock(vm.CurrentFrame.BlockID)
-
-	// Pop frame safely when execution winds down back to standard context levels
-	if len(vm.CallStack) > frameStartDepth {
-		vm.CurrentFrame = vm.CallStack[len(vm.CallStack)-1]
-		vm.CallStack = vm.CallStack[:len(vm.CallStack)-1]
+func (vm *VM) executeSubLoop() {
+	vm.executeCurrentFrame()
+	if len(vm.CallStack) == 0 {
+		return
 	}
+
+	vm.CurrentFrame = vm.CallStack[len(vm.CallStack)-1]
+	vm.CallStack = vm.CallStack[:len(vm.CallStack)-1]
 }
 
-func (vm *VirtualMachine) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
+func (vm *VM) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
 	// Extract explicit argument items out of stack memory
-	args := make([]uint32, argCount)
+	args := make([]Value, argCount)
 	for i := int(argCount) - 1; i >= 0; i-- {
-		topIdx := len(vm.DataStack) - 1
-		args[i] = vm.DataStack[topIdx]
-		vm.DataStack = vm.DataStack[:topIdx]
+		args[i] = vm.popValue()
 	}
 
 	switch sysID {
-	case 1: // IsLightOn(lightId) -> Returns 1 or 0
-		lightID := args[0]
-		status := vm.LightsOn[lightID]
+	case uint8(SystemCallDrawBackground):
+		//vm.appendDrawLog("DrawBackground(Image: %d)", args[0])
+		vm.SysCalls.DrawBackground(args[0].AsUint32())
 
-		// Push returned data back onto evaluation pipeline
-		vm.DataStack = append(vm.DataStack, status)
-		fmt.Printf("[Syscall] IsLightOn(ID: %d) -> Returns %d\n", lightID, status)
+	case uint8(SystemCallDrawSprite):
+		//vm.appendDrawLog("DrawSprite(Sprite: %d, X: %d, Y: %d)", args[0], args[1], args[2])
+		vm.SysCalls.DrawSprite(args[0].AsUint32(), args[1].AsUint32(), args[2].AsUint32())
 
-	case 2: // SetLightOnOff(lightId, onOff) -> Returns nothing
+	case uint8(SystemCallDrawText):
+		//vm.appendDrawLog("DrawText(Font: %d, Text: %d, X: %d, Y: %d, Color: %d)", args[0], args[1], args[2], args[3], args[4])
+		vm.SysCalls.DrawText(args[0].AsUint32(), args[1].AsUint32(), args[2].AsUint32(), args[3].AsUint32(), args[4].AsUint32())
+
+	case uint8(SystemCallDrawVar):
+		//vm.appendDrawLog("DrawVar(Font: %d, Var: %d, X: %d, Y: %d, Color: %d)", args[0], args[1], args[2], args[3], args[4])
+		vm.SysCalls.DrawVar(args[0].AsUint32(), args[1].AsUint32(), args[2].AsUint32(), args[3].AsUint32(), args[4].AsUint32())
+
+	case uint8(SystemCallStartTimer):
+		timerID := args[0]
+		duration := args[1]
+		vm.SysCalls.StartTimer(timerID.AsUint32(), duration.AsUint32())
+
+	case uint8(SystemCallStopTimer):
+		timerID := args[0]
+		vm.SysCalls.StopTimer(timerID.AsUint32())
+
+	case uint8(SystemCallGetTimer):
+		timerID := args[0]
+		timerValue := vm.SysCalls.GetTimer(timerID.AsUint32())
+		vm.pushValue(Value{Kind: ValueKindU32, Bits: timerValue})
+
+	case uint8(SystemCallSetLightOnOff):
 		lightID := args[0]
 		onOff := args[1]
-		vm.LightsOn[lightID] = onOff
-		fmt.Printf("[Syscall] SetLightOnOff(ID: %d, State: %d)\n", lightID, onOff)
+		vm.SysCalls.SetLightOnOff(lightID.AsUint32(), onOff.AsUint32())
 
-	case 3: // DrawSprite(spriteId, x, y)
-		fmt.Printf("[Syscall] DrawSprite(Sprite: %d, X: %d, Y: %d)\n", args[0], args[1], args[2])
+	case uint8(SystemCallIsLightOn):
+		lightID := args[0]
+		status := vm.SysCalls.IsLightOn(lightID.AsUint32())
+		vm.pushValue(Value{Kind: ValueKindU32, Bits: status})
+
+	case uint8(SystemCallSetLightBrightness):
+		lightID := args[0]
+		brightness := args[1]
+		vm.SysCalls.SetLightBrightness(lightID.AsUint32(), brightness.AsUint32())
+
+	case uint8(SystemCallGetLightBrightness):
+		lightID := args[0]
+		brightness := vm.SysCalls.GetLightBrightness(lightID.AsUint32())
+		vm.pushValue(Value{Kind: ValueKindU32, Bits: brightness})
+
+	case uint8(SystemCallSetLightColor):
+		lightID := args[0]
+		color := args[1]
+		vm.SysCalls.SetLightColor(lightID.AsUint32(), color.AsUint32())
+
+	case uint8(SystemCallGetLightColor):
+		lightID := args[0]
+		color := vm.SysCalls.GetLightColor(lightID.AsUint32())
+		vm.pushValue(Value{Kind: ValueKindU32, Bits: color})
 
 	default:
 		fmt.Printf("VM Warning: Triggered unregistered system block execution ID %d\n", sysID)

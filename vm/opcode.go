@@ -1,35 +1,59 @@
 package vm
 
+const (
+	LocalIDType uint8  = 0
+	idIndexMask uint32 = 0x00FFFFFF
+	idTypeShift uint32 = 24
+)
+
 type Opcode uint8
 
+type ConstType uint8
+
 const (
-	OpReturn       Opcode = 0x00
-	OpPushConstU8  Opcode = 0x01
-	OpPushConstU16 Opcode = 0x02
-	OpPushConstU32 Opcode = 0x03
-	OpPushConstS8  Opcode = 0x04
-	OpPushConstS16 Opcode = 0x05
-	OpPushConstS32 Opcode = 0x06
-	OpPushConstF32 Opcode = 0x07
-	OpPushVar      Opcode = 0x08 // Reads a global predefined state variable [Type:8, Index:24]
-	OpPopVar       Opcode = 0x09 // Writes to a global predefined state variable [Type:8, Index:24]
-	OpIf           Opcode = 0x0A
-	OpBinaryOp     Opcode = 0x0B
-	OpSyscall      Opcode = 0x0C
+	ConstTypeU8 ConstType = iota
+	ConstTypeU16
+	ConstTypeU32
+	ConstTypeS8
+	ConstTypeS16
+	ConstTypeS32
+	ConstTypeF32
+)
+
+const (
+	OpReturn    Opcode = 0x00
+	OpPushConst Opcode = 0x01 // Reads a ConstType byte plus payload.
+	OpPushVar   Opcode = 0x08 // Reads a global predefined state variable [Type:8, Index:24]
+	OpPopVar    Opcode = 0x09 // Writes to a global predefined state variable [Type:8, Index:24]
+	OpIf        Opcode = 0x0A
+	OpBinaryOp  Opcode = 0x0B
+	OpSyscall   Opcode = 0x0C
 
 	// Local Variable Storage Opcodes
-	OpGetLocal Opcode = 0x0D // Pushes local var onto stack (Followed by 1 byte: Frame Offset)
-	OpSetLocal Opcode = 0x0E // Pops value from stack into local var slot (Followed by 1 byte: Frame Offset)
+	OpGetLocal Opcode = 0x0D // Pushes local var onto stack (Followed by packed [Type:8, Index:24])
+	OpSetLocal Opcode = 0x0E // Pops value from stack into local var slot (Followed by packed [Type:8, Index:24])
 )
+
+func (id ID) Pack() uint32 {
+	return (uint32(id.Type) << idTypeShift) | (id.Idx & idIndexMask)
+}
+
+func NewID(raw uint32) ID {
+	return ID{
+		Type: uint8(raw >> idTypeShift),
+		Idx:  raw & idIndexMask,
+	}
+}
 
 type BinaryOpType uint8
 
 const (
-	OpAdd   BinaryOpType = 0
-	OpSub   BinaryOpType = 1
-	OpEqual BinaryOpType = 2
-	OpG     BinaryOpType = 3
-	OpGE    BinaryOpType = 4
-	OpL     BinaryOpType = 5
-	OpLE    BinaryOpType = 6
+	OpAdd BinaryOpType = 0
+	OpSub BinaryOpType = 1
+	OpMul BinaryOpType = 2
+	OpEQ  BinaryOpType = 3
+	OpG   BinaryOpType = 4
+	OpGE  BinaryOpType = 5
+	OpL   BinaryOpType = 6
+	OpLE  BinaryOpType = 7
 )
