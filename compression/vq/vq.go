@@ -179,6 +179,7 @@ func VqEncode(inputPath, outputPath string) {
 	totalCompressedFileBytes := 4 + compressedPayloadSize // Adding 4-byte descriptor header
 
 	fmt.Printf("--- Analysis Results ---\n")
+	fmt.Printf("Image size: %d x %d pixels\n", Width, Height)
 	fmt.Printf("Unique 2x2 Blocks: %d (%d bytes)\n", len(codebook2x2), sizeCodebook2x2)
 	fmt.Printf("Unique 4x4 Blocks: %d (%d bytes)\n", len(codebook4x4), sizeCodebook4x4)
 	fmt.Printf("Total Compressed Budget: %d bytes\n", totalCompressedFileBytes)
