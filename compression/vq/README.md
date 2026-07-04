@@ -34,12 +34,13 @@ The encoder compiles down to a cross-platform command-line tool. It reads standa
 
 ### Compilation
 ```bash
-go build -o vq_encoder encoder.go
+go build -o vq vq.go
 ```
 
 ### Execution Command
 ```bash
-./vq_encoder <input_image.png> <output_asset.bin>
+./vq encode <input_image.png> <output_asset.vq>
+./vq decode <output_asset.vq> <output_image.png>
 ```
 
 ---
