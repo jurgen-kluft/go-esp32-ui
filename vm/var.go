@@ -41,10 +41,11 @@ const (
 )
 
 type Var struct {
-	Index uint16
-	Type  VarType
-	Flags VarFlag
-	Value any
+	Generation uint32
+	Index      uint16
+	Type       VarType
+	Flags      VarFlag
+	Value      any
 }
 
 func (v Var) IsSet() bool {
@@ -248,6 +249,7 @@ const (
 	GlobalRefType      uint8  = 0
 	ConstRefType       uint8  = 1
 	LocalRefType       uint8  = 2
+	TempRefType        uint8  = 3
 	varRefIndexMask    uint32 = 0x00FFFFFF
 	varRefStorageShift uint32 = 24
 )
@@ -267,6 +269,24 @@ func ConstRef(index uint32) VarRef {
 
 func LocalRef(index uint32) VarRef {
 	return VarRef{Storage: LocalRefType, Index: index}
+}
+
+func TempRef(index uint32) VarRef {
+	return VarRef{Storage: TempRefType, Index: index}
+}
+
+// StackRef is the runtime-facing reference shape for operand-stack entries.
+// The bytecode still uses packed VarRef operands; this type carries the same
+// storage identity explicitly plus a runtime validity token for arena-backed
+// locals and temps so stale refs can be rejected after slot reuse.
+type StackRef struct {
+	Storage uint8
+	Index   uint32
+	ScopeID uint32
+}
+
+func StackRefFromVarRef(ref VarRef, scopeID uint32) StackRef {
+	return StackRef{Storage: ref.Storage, Index: ref.Index, ScopeID: scopeID}
 }
 
 func (ref VarRef) Pack() uint32 {

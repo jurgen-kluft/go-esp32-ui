@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+func requireStackValue(t *testing.T, vm *VM, index uint32) *Var {
+	t.Helper()
+
+	value, ok := vm.StackValueAt(index)
+	if !ok {
+		t.Fatalf("stack value %d did not resolve; refs=%s", index, vm.DumpRefStack())
+	}
+	return value
+}
+
+func requireStackUint32(t *testing.T, vm *VM, index uint32, want uint32) {
+	t.Helper()
+
+	if got := requireStackValue(t, vm, index).Uint32Value(); got != want {
+		t.Fatalf("unexpected stack value at %d: got %d want %d", index, got, want)
+	}
+}
+
 func parseStatements(t *testing.T, body string) []ast.Stmt {
 	t.Helper()
 

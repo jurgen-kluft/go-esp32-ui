@@ -432,6 +432,9 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 			binary.Write(&buf, binary.LittleEndian, falseBlock.ID)
 
 		case *ast.ReturnStmt:
+			if len(s.Results) > defaultReturnScratchSize {
+				return fmt.Errorf("compile error: return supports at most %d values", defaultReturnScratchSize)
+			}
 			for _, rExpr := range s.Results {
 				rBytes, err := c.compileExpression(rExpr)
 				if err != nil {

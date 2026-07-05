@@ -111,9 +111,10 @@ func TestCompileFloatAndSignedLiteralsExecute(t *testing.T) {
 			vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes, Consts: block.Consts}
 			vm.ExecuteBlock(block.ID)
 
-			if len(vm.DataStack) != 1 || vm.DataStack[0].Uint32Value() != testCase.want {
-				t.Fatalf("unexpected stack after execution: %v want %d", vm.DataStack, testCase.want)
+			if vm.StackLen() != 1 {
+				t.Fatalf("unexpected stack after execution: %s want %d", vm.DumpRefStack(), testCase.want)
 			}
+			requireStackUint32(t, vm, 0, testCase.want)
 		})
 	}
 }
@@ -139,9 +140,10 @@ func TestCompileUnaryArithmeticExecute(t *testing.T) {
 			vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes, Consts: block.Consts}
 			vm.ExecuteBlock(block.ID)
 
-			if len(vm.DataStack) != 1 || vm.DataStack[0].Uint32Value() != testCase.want {
-				t.Fatalf("unexpected stack after execution: %v want %d", vm.DataStack, testCase.want)
+			if vm.StackLen() != 1 {
+				t.Fatalf("unexpected stack after execution: %s want %d", vm.DumpRefStack(), testCase.want)
 			}
+			requireStackUint32(t, vm, 0, testCase.want)
 		})
 	}
 }
@@ -176,6 +178,28 @@ func TestBinaryExpressionPropagatesOperandErrors(t *testing.T) {
 	}
 
 	want := fmt.Sprintf("compile error: variable '%s' undefined", "missing")
+	if err.Error() != want {
+		t.Fatalf("unexpected compile error: got %q want %q", err.Error(), want)
+	}
+}
+
+func TestCompileReturnArityBoundary(t *testing.T) {
+	systemInterface := NewCompilerSystemCalls()
+	compiler := NewCompiler(nil, systemInterface)
+
+	block := compiler.AllocateBlock()
+	err := compiler.CompileBlock(block, parseStatements(t, "return 1, 2, 3, 4"))
+	if err != nil {
+		t.Fatalf("expected 4-value return to compile: %v", err)
+	}
+
+	block = compiler.AllocateBlock()
+	err = compiler.CompileBlock(block, parseStatements(t, "return 1, 2, 3, 4, 5"))
+	if err == nil {
+		t.Fatal("expected compile error for 5-value return")
+	}
+
+	want := fmt.Sprintf("compile error: return supports at most %d values", defaultReturnScratchSize)
 	if err.Error() != want {
 		t.Fatalf("unexpected compile error: got %q want %q", err.Error(), want)
 	}
@@ -223,10 +247,10 @@ func TestIntrinsicVarToInt32ArithmeticAndUint32CastExecute(t *testing.T) {
 	vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes, Consts: block.Consts}
 	vm.ExecuteBlock(block.ID)
 
-	if len(vm.DataStack) != 1 {
-		t.Fatalf("unexpected stack size: got %d want 1", len(vm.DataStack))
+	if vm.StackLen() != 1 {
+		t.Fatalf("unexpected stack size: got %d want 1", vm.StackLen())
 	}
-	if got := vm.DataStack[0]; got.AsUint32() != 50 {
+	if got := requireStackValue(t, vm, 0); got.AsUint32() != 50 {
 		t.Fatalf("unexpected cast arithmetic result: got %+v", got)
 	}
 }
@@ -264,10 +288,10 @@ func TestIntrinsicVarEqIgnoresGenericTypeArgs(t *testing.T) {
 	vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes, Consts: block.Consts}
 	vm.ExecuteBlock(block.ID)
 
-	if len(vm.DataStack) != 1 {
-		t.Fatalf("unexpected stack size: got %d want 1", len(vm.DataStack))
+	if vm.StackLen() != 1 {
+		t.Fatalf("unexpected stack size: got %d want 1", vm.StackLen())
 	}
-	if got := vm.DataStack[0].AsUint32(); got != 1 {
+	if got := requireStackValue(t, vm, 0).AsUint32(); got != 1 {
 		t.Fatalf("unexpected VarEq result: got %d want 1", got)
 	}
 }

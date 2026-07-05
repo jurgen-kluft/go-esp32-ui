@@ -135,9 +135,10 @@ func TestCompilerLoadsDeclaredGlobalsFromFile(t *testing.T) {
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(block.ID)
 
-	if len(vm.DataStack) != 1 || vm.DataStack[0].Uint32Value() != 99 {
-		t.Fatalf("unexpected stack after execution: %v", vm.DataStack)
+	if vm.StackLen() != 1 {
+		t.Fatalf("unexpected stack after execution: %s", vm.DumpRefStack())
 	}
+	requireStackUint32(t, vm, 0, 99)
 }
 
 func TestCompileAndExecuteDrawTextWithStringLiteral(t *testing.T) {
