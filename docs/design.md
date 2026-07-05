@@ -4,7 +4,7 @@ We develop the UI in Golang using constrained functionality of Go and only a giv
 
 The UI code should mainly use logic and control flow, but to get a better grip of what is not supported, the following list of unsupported Golang functionality should give a good overview of what is not supported:
 
-* no arrays, no slices, no maps
+* no arrays, no slices, no maps, no structs, no pointers
 * no allocation of memory (no new, no make, no append)
 * no reflection
 * no goroutines, no channels
@@ -13,11 +13,9 @@ The UI code should mainly use logic and control flow, but to get a better grip o
 * no closures, no anonymous functions
 * no package imports, no external packages
 
-The UI code can be compiled to a bytecode format that is interpreted by a custom virtual-machine running on the ESP32. 
-The virtual machine is implemented in C like C++.
+The UI code can be compiled to a bytecode format that is interpreted by a custom virtual-machine running on the ESP32. The virtual machine is implemented in C like C++.
 
-This means that the UI code is a VM binary and we can update the UI without having to recompile the entire firmware. 
-The UI can be updated over-the-air (OTA) or on an SD card.
+This means that the UI code is a VM binary and we can update the UI without having to recompile the entire firmware. The UI can be updated over-the-air (OTA) or on an SD card.
 
 ## State
 
