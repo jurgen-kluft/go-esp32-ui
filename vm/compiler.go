@@ -330,6 +330,8 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 			buf.WriteByte(byte(OpSub))
 		case token.MUL:
 			buf.WriteByte(byte(OpMul))
+		case token.QUO:
+			buf.WriteByte(byte(OpDiv))
 		case token.EQL:
 			buf.WriteByte(byte(OpEQ))
 		case token.GTR:

@@ -31,8 +31,9 @@ type CallFrame struct {
 }
 
 type VM struct {
-	Blocks      map[uint32]VMBlock
-	GlobalState map[uint32]uint32 // Predefined shared external variables
+	Blocks map[uint32]VMBlock
+	//GlobalState map[uint32]uint32 // Predefined shared external variables
+	GlobalState VmGlobalStateInterface
 
 	// Evaluation and Storage Stack
 	DataStack []Value
@@ -44,10 +45,10 @@ type VM struct {
 	SysCalls VmSystemInterface
 }
 
-func NewVirtualMachine(systemCalls VmSystemInterface) *VM {
+func NewVirtualMachine(systemCalls VmSystemInterface, globalState VmGlobalStateInterface) *VM {
 	return &VM{
 		Blocks:      make(map[uint32]VMBlock),
-		GlobalState: make(map[uint32]uint32),
+		GlobalState: globalState,
 		DataStack:   make([]Value, 0, 256),
 		CallStack:   make([]CallFrame, 0, 16),
 		SysCalls:    systemCalls,
@@ -138,6 +139,36 @@ func (vm *VM) applyBinaryOp(opType BinaryOpType, left, right Value) Value {
 			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() * right.AsInt32())}
 		default:
 			return Value{Kind: ValueKindU32, Bits: left.AsUint32() * right.AsUint32()}
+		}
+	case OpDiv:
+		switch resultKind {
+		case ValueKindF32:
+			leftValue := left.AsFloat32()
+			rightValue := right.AsFloat32()
+			if rightValue == 0 {
+				if leftValue < 0 {
+					return Value{Kind: ValueKindF32, Bits: math.Float32bits(float32(math.Inf(-1)))}
+				}
+				return Value{Kind: ValueKindF32, Bits: math.Float32bits(float32(math.Inf(1)))}
+			}
+			return Value{Kind: ValueKindF32, Bits: math.Float32bits(leftValue / rightValue)}
+		case ValueKindS32:
+			leftValue := left.AsInt32()
+			rightValue := right.AsInt32()
+			if rightValue == 0 {
+				if leftValue < 0 {
+					return Value{Kind: ValueKindS32, Bits: uint32(1 << 31)}
+				}
+				return Value{Kind: ValueKindS32, Bits: uint32(int32(1<<31 - 1))}
+			}
+			return Value{Kind: ValueKindS32, Bits: uint32(leftValue / rightValue)}
+		default:
+			leftValue := left.AsUint32()
+			rightValue := right.AsUint32()
+			if rightValue == 0 {
+				return Value{Kind: ValueKindU32, Bits: math.MaxUint32}
+			}
+			return Value{Kind: ValueKindU32, Bits: leftValue / rightValue}
 		}
 	case OpEQ:
 		switch resultKind {
@@ -252,13 +283,21 @@ func (vm *VM) executeCurrentFrame() {
 		case OpPushVar:
 			varID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
-			vm.pushStoredValue(NewID(varID).Type, vm.GlobalState[varID])
+			globalVar, ok := vm.GlobalState.GetGlobalVar(NewID(varID))
+			if !ok {
+				fmt.Printf("VM Error: Global variable ID %d not found\n", varID)
+				return
+			}
+			vm.pushStoredValue(NewID(varID).Type, globalVar)
 
 		case OpPopVar:
 			varID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
 			val := vm.popValue()
-			vm.GlobalState[varID] = val.Bits
+			if !vm.GlobalState.SetGlobalVar(NewID(varID), val.Bits) {
+				fmt.Printf("VM Error: Failed to set global variable ID %d\n", varID)
+				return
+			}
 
 		case OpGetLocal:
 			localID := NewID(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))

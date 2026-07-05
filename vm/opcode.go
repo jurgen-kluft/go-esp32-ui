@@ -51,9 +51,10 @@ const (
 	OpAdd BinaryOpType = 0
 	OpSub BinaryOpType = 1
 	OpMul BinaryOpType = 2
-	OpEQ  BinaryOpType = 3
-	OpG   BinaryOpType = 4
-	OpGE  BinaryOpType = 5
-	OpL   BinaryOpType = 6
-	OpLE  BinaryOpType = 7
+	OpDiv BinaryOpType = 3
+	OpEQ  BinaryOpType = 4
+	OpG   BinaryOpType = 5
+	OpGE  BinaryOpType = 6
+	OpL   BinaryOpType = 7
+	OpLE  BinaryOpType = 8
 )

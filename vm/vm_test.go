@@ -27,6 +27,26 @@ func NewTestSystemInterface() *TestSystemInterface {
 	}
 }
 
+type TestGlobalState struct {
+	vars map[uint32]uint32
+}
+
+func NewTestGlobalState() *TestGlobalState {
+	return &TestGlobalState{
+		vars: make(map[uint32]uint32),
+	}
+}
+
+func (g *TestGlobalState) GetGlobalVar(id ID) (uint32, bool) {
+	val, ok := g.vars[id.Pack()]
+	return val, ok
+}
+
+func (g *TestGlobalState) SetGlobalVar(id ID, value uint32) bool {
+	g.vars[id.Pack()] = value
+	return true
+}
+
 func (s *TestSystemInterface) DrawBackground(imageID uint32) {
 	s.DrawLog = append(s.DrawLog, fmt.Sprintf("DrawBackground(Image: %d)", imageID))
 }
@@ -74,7 +94,8 @@ func TestCompileAndExecuteLocalValue(t *testing.T) {
 	block := compileBlockForTest(t, nil, "x := 42\nreturn x")
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
 	vm.ExecuteBlock(block.ID)
 
@@ -88,8 +109,9 @@ func TestCompileAndExecuteGlobalValue(t *testing.T) {
 	block := compileBlockForTest(t, map[string]ID{"g": globalID}, "return g")
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
-	vm.GlobalState[globalID.Pack()] = 99
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
+	globalState.SetGlobalVar(globalID, 99)
 	vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
 	vm.ExecuteBlock(block.ID)
 
@@ -117,7 +139,8 @@ func TestExecuteTaggedConstEncodings(t *testing.T) {
 	block.LocalCount = 0
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
 	vm.ExecuteBlock(block.ID)
 
@@ -142,15 +165,16 @@ func TestExecuteIfReturnsToParentFrame(t *testing.T) {
 	}
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
-	vm.GlobalState[globalID.Pack()] = 0
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
+	globalState.SetGlobalVar(globalID, 0)
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(root.ID)
 
 	if len(vm.DataStack) != 1 || vm.DataStack[0].Bits != 11 {
 		t.Fatalf("unexpected stack after if execution: %v", vm.DataStack)
 	}
-	if got := vm.GlobalState[globalID.Pack()]; got != 11 {
+	if got, ok := globalState.GetGlobalVar(globalID); !ok || got != 11 {
 		t.Fatalf("global state not updated by branch: got %d", got)
 	}
 	if vm.CurrentFrame.BlockID != root.ID {
@@ -170,6 +194,8 @@ func TestCompileAndExecuteBinaryOperators(t *testing.T) {
 		{name: "add", expr: "return 9 + 4", want: 13},
 		{name: "sub", expr: "return 9 - 4", want: 5},
 		{name: "mul", expr: "return 9 * 4", want: 36},
+		{name: "div", expr: "return 9 / 4", want: 2},
+		{name: "div exact", expr: "return 9 / 3", want: 3},
 		{name: "eq true", expr: "return 9 == 9", want: 1},
 		{name: "eq false", expr: "return 9 == 4", want: 0},
 		{name: "gt", expr: "return 9 > 4", want: 1},
@@ -185,12 +211,43 @@ func TestCompileAndExecuteBinaryOperators(t *testing.T) {
 			block := compileBlockForTest(t, nil, testCase.expr)
 
 			sys := NewTestSystemInterface()
-			vm := NewVirtualMachine(sys)
+			globalState := NewTestGlobalState()
+			vm := NewVirtualMachine(sys, globalState)
 			vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
 			vm.ExecuteBlock(block.ID)
 
 			if len(vm.DataStack) != 1 || vm.DataStack[0].Bits != testCase.want {
 				t.Fatalf("unexpected stack after execution: %v want %d", vm.DataStack, testCase.want)
+			}
+		})
+	}
+}
+
+func TestCompileAndExecuteDivisionByZero(t *testing.T) {
+	testCases := []struct {
+		name string
+		expr string
+		want Value
+	}{
+		{name: "u32 saturates", expr: "return 9 / 0", want: Value{Kind: ValueKindU32, Bits: math.MaxUint32}},
+		{name: "s32 saturates positive", expr: "return -(-9) / 0", want: Value{Kind: ValueKindS32, Bits: uint32(int32(1<<31 - 1))}},
+		{name: "s32 saturates negative", expr: "return -9 / 0", want: Value{Kind: ValueKindS32, Bits: uint32(1 << 31)}},
+		{name: "f32 saturates positive", expr: "return 1.5 / 0", want: Value{Kind: ValueKindF32, Bits: math.Float32bits(float32(math.Inf(1)))}},
+		{name: "f32 saturates negative", expr: "return -1.5 / 0", want: Value{Kind: ValueKindF32, Bits: math.Float32bits(float32(math.Inf(-1)))}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			block := compileBlockForTest(t, nil, testCase.expr)
+
+			sys := NewTestSystemInterface()
+			globalState := NewTestGlobalState()
+			vm := NewVirtualMachine(sys, globalState)
+			vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
+			vm.ExecuteBlock(block.ID)
+
+			if len(vm.DataStack) != 1 || vm.DataStack[0] != testCase.want {
+				t.Fatalf("unexpected stack after execution: %v want %+v", vm.DataStack, testCase.want)
 			}
 		})
 	}
@@ -205,7 +262,8 @@ func TestCompileAndExecuteDrawSyscalls(t *testing.T) {
 	}, "\n"))
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(root.ID)
 
@@ -234,7 +292,8 @@ func TestCompileAndExecuteTimerSyscalls(t *testing.T) {
 	}, "\n"))
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(root.ID)
 
@@ -258,7 +317,8 @@ func TestCompileAndExecuteLightStateSyscalls(t *testing.T) {
 	}, "\n"))
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(root.ID)
 
@@ -365,7 +425,8 @@ func TestSyscallArgumentsUseNumericConversion(t *testing.T) {
 	compiler, root := compileProgramForTest(t, nil, "DrawBackground(1.75)")
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(root.ID)
 

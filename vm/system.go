@@ -36,6 +36,11 @@ type VmSystemInterface interface {
 	GetLightColor(lightID uint32) uint32
 }
 
+type VmGlobalStateInterface interface {
+	GetGlobalVar(id ID) (uint32, bool)
+	SetGlobalVar(id ID, value uint32) bool
+}
+
 type CompilerSystemInterface interface {
 	RegisterSystemCall(name string) (uint8, bool)
 }
@@ -44,7 +49,7 @@ type CompilerSystemCalls struct {
 	systemCallMap map[string]uint8
 }
 
-func NewCompilerSystemCalls() *CompilerSystemCalls {
+func NewCompilerSystemCalls() CompilerSystemInterface {
 	csc := &CompilerSystemCalls{
 		systemCallMap: make(map[string]uint8),
 	}

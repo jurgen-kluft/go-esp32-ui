@@ -107,7 +107,8 @@ func TestCompileFloatAndSignedLiteralsExecute(t *testing.T) {
 			block := compileBlockForTest(t, nil, testCase.src)
 
 			sys := NewTestSystemInterface()
-			vm := NewVirtualMachine(sys)
+			globalState := NewTestGlobalState()
+			vm := NewVirtualMachine(sys, globalState)
 			vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
 			vm.ExecuteBlock(block.ID)
 
@@ -135,7 +136,8 @@ func TestCompileUnaryArithmeticExecute(t *testing.T) {
 			block := compileBlockForTest(t, nil, testCase.src)
 
 			sys := NewTestSystemInterface()
-			vm := NewVirtualMachine(sys)
+			globalState := NewTestGlobalState()
+			vm := NewVirtualMachine(sys, globalState)
 			vm.Blocks[block.ID] = VMBlock{ID: block.ID, LocalCount: block.LocalCount, Bytes: block.Bytes}
 			vm.ExecuteBlock(block.ID)
 
@@ -151,13 +153,18 @@ func TestUnsupportedBinaryOperatorFailsCompilation(t *testing.T) {
 	compiler := NewCompiler(nil, systemInterface)
 	block := compiler.AllocateBlock()
 	err := compiler.CompileBlock(block, parseStatements(t, "return 9 / 4"))
-	if err == nil {
-		t.Fatal("expected compile error for unsupported operator")
+	if err != nil {
+		t.Fatalf("expected division to compile: %v", err)
 	}
 
-	want := "unsupported binary operator: /"
-	if err.Error() != want {
-		t.Fatalf("unexpected compile error: got %q want %q", err.Error(), want)
+	want := []byte{byte(OpPushConst), byte(ConstTypeU8), 9, byte(OpPushConst), byte(ConstTypeU8), 4, byte(OpBinaryOp), byte(OpDiv), byte(OpReturn), 1}
+	if len(block.Bytes) != len(want) {
+		t.Fatalf("unexpected bytecode length: got %d want %d (%v)", len(block.Bytes), len(want), block.Bytes)
+	}
+	for i, wantByte := range want {
+		if block.Bytes[i] != wantByte {
+			t.Fatalf("unexpected byte at offset %d: got %d want %d (%v)", i, block.Bytes[i], wantByte, block.Bytes)
+		}
 	}
 }
 

@@ -53,7 +53,8 @@ func TestCompileFunctionFile(t *testing.T) {
 	}
 
 	sys := NewTestSystemInterface()
-	vm := NewVirtualMachine(sys)
+	globalState := NewTestGlobalState()
+	vm := NewVirtualMachine(sys, globalState)
 	loadProgramIntoVM(vm, compiler)
 	vm.ExecuteBlock(block.ID)
 
