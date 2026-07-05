@@ -10,85 +10,315 @@ import (
 	"strconv"
 )
 
-type ID struct {
-	Type uint8
-	Idx  uint32
-}
+type BlockScope uint8
+
+const (
+	BlockScopeFrame BlockScope = iota
+	BlockScopeSub
+)
 
 type Block struct {
-	ID         uint32
-	LocalCount uint32 // Tells the VM how many local variable slots to allocate on the stack frame
-	Bytes      []byte
+	ID              uint32
+	Scope           BlockScope
+	InheritedLocals uint32
+	LocalCount      uint32 // Tells the VM how many local variable slots are visible in this block
+	Bytes           []byte
+	Consts          []Var
 }
 
 type Compiler struct {
-	blocks       map[uint32]*Block
-	nextBlockID  uint32
-	globalVarMap map[string]ID // Predefined external variables [Type:8, Index:24]
+	blocks          map[uint32]*Block
+	nextBlockID     uint32
+	explicitGlobals map[string]VarRef
 
-	systemInterface CompilerSystemInterface
+	systemInterface  CompilerSystemInterface
+	declaredGlobals  map[string]Var
+	numericConstants map[string]Var
+	stringConstants  map[string]Var
+	nextConstIndex   uint16
 	// Track local variables currently in scope for the block being compiled
-	localsMap    map[string]ID // [Type:8, Index:24]
+	localsMap    map[string]VarRef
+	localVars    map[string]Var
 	nextLocalIdx uint32
 }
 
-func NewCompiler(globals map[string]ID, systemInterface CompilerSystemInterface) *Compiler {
+func NewCompiler(globals map[string]VarRef, systemInterface CompilerSystemInterface) *Compiler {
 	c := &Compiler{
-		blocks:          make(map[uint32]*Block),
-		nextBlockID:     0,
-		globalVarMap:    globals,
-		systemInterface: systemInterface,
-		localsMap:       make(map[string]ID),
-		nextLocalIdx:    0,
+		blocks:           make(map[uint32]*Block),
+		nextBlockID:      0,
+		explicitGlobals:  globals,
+		systemInterface:  systemInterface,
+		declaredGlobals:  make(map[string]Var),
+		numericConstants: make(map[string]Var),
+		stringConstants:  make(map[string]Var),
+		nextConstIndex:   0,
+		localsMap:        make(map[string]VarRef),
+		localVars:        make(map[string]Var),
+		nextLocalIdx:     0,
 	}
 	return c
 }
 
-func (c *Compiler) AllocateBlock() *Block {
+func (c *Compiler) LoadDeclaredGlobalsFromFile(path string) error {
+	_, file, err := ParseGoFile(path)
+	if err != nil {
+		return err
+	}
+
+	globals, err := ParseDeclaredGlobals(file)
+	if err != nil {
+		return err
+	}
+	for name, variable := range globals {
+		c.declaredGlobals[name] = variable
+	}
+	return nil
+}
+
+func (c *Compiler) lookupGlobalRef(name string) (VarRef, bool) {
+	if variable, ok := c.declaredGlobals[name]; ok {
+		return GlobalRef(uint32(variable.Index)), true
+	}
+	if c.explicitGlobals == nil {
+		return VarRef{}, false
+	}
+	ref, ok := c.explicitGlobals[name]
+	return ref, ok
+}
+
+func (c *Compiler) lookupDeclaredGlobal(name string) (Var, bool) {
+	variable, ok := c.declaredGlobals[name]
+	return variable, ok
+}
+
+func (c *Compiler) internStringConstant(literal string) VarRef {
+	if variable, ok := c.stringConstants[literal]; ok {
+		return ConstRef(uint32(variable.Index))
+	}
+
+	variable := Var{
+		Index: c.nextConstIndex,
+		Type:  VarTypeStr,
+		Flags: VarFlagConst | VarFlagPtr,
+		Value: literal,
+	}
+	c.stringConstants[literal] = variable
+	c.nextConstIndex++
+	return ConstRef(uint32(variable.Index))
+}
+
+func compilerConstKey(varType VarType, bits uint32) string {
+	return fmt.Sprintf("%d:%d", varType, bits)
+}
+
+func (c *Compiler) internNumericConstant(varType VarType, bits uint32) VarRef {
+	key := compilerConstKey(varType, bits)
+	if variable, ok := c.numericConstants[key]; ok {
+		return ConstRef(uint32(variable.Index))
+	}
+
+	variable := Var{
+		Index: c.nextConstIndex,
+		Type:  varType,
+		Flags: VarFlagConst,
+	}
+	variable.SetUint32Value(bits)
+	c.numericConstants[key] = variable
+	c.nextConstIndex++
+	return ConstRef(uint32(variable.Index))
+}
+
+func unwrapCallName(expr ast.Expr) (string, bool) {
+	switch call := expr.(type) {
+	case *ast.Ident:
+		return call.Name, true
+	case *ast.IndexExpr:
+		return unwrapCallName(call.X)
+	case *ast.IndexListExpr:
+		return unwrapCallName(call.X)
+	default:
+		return "", false
+	}
+}
+
+func (c *Compiler) compileBinaryIntrinsic(args []ast.Expr, opType BinaryOpType) ([]byte, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("intrinsic expects 2 arguments")
+	}
+
+	left, err := c.compileExpression(args[0])
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.compileExpression(args[1])
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	buf.Write(left)
+	buf.Write(right)
+	buf.WriteByte(byte(OpBinaryOp))
+	buf.WriteByte(byte(opType))
+	return buf.Bytes(), nil
+}
+
+func (c *Compiler) compileNumericCast(targetType VarType, args []ast.Expr) ([]byte, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("numeric cast expects 1 argument")
+	}
+
+	inner, err := c.compileExpression(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	buf.Write(inner)
+	if err := writePushVarRef(&buf, c.internNumericConstant(targetType, 0)); err != nil {
+		return nil, err
+	}
+	buf.WriteByte(byte(OpBinaryOp))
+	buf.WriteByte(byte(OpAdd))
+	return buf.Bytes(), nil
+}
+
+func (c *Compiler) resolveAssignIntrinsicTarget(expr ast.Expr) (Opcode, VarRef, error) {
+	switch target := expr.(type) {
+	case *ast.UnaryExpr:
+		if target.Op != token.AND {
+			return 0, VarRef{}, fmt.Errorf("VarAssign target must use &identifier")
+		}
+		return c.resolveAssignIntrinsicTarget(target.X)
+	case *ast.Ident:
+		if globalRef, isGlobal := c.lookupGlobalRef(target.Name); isGlobal {
+			return OpPopVar, globalRef, nil
+		}
+		if localRef, isLocal := c.localsMap[target.Name]; isLocal {
+			return OpSetLocal, localRef, nil
+		}
+		return 0, VarRef{}, fmt.Errorf("VarAssign target '%s' undefined", target.Name)
+	default:
+		return 0, VarRef{}, fmt.Errorf("VarAssign target must be an identifier")
+	}
+}
+
+func (c *Compiler) compileAssignIntrinsic(args []ast.Expr) ([]byte, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("VarAssign expects 2 arguments")
+	}
+
+	opcode, ref, err := c.resolveAssignIntrinsicTarget(args[0])
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := c.compileExpression(args[1])
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	buf.Write(rhs)
+	buf.WriteByte(byte(opcode))
+	if err := writePackedVarRef(&buf, ref); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *Compiler) compileIntrinsicCall(name string, args []ast.Expr) ([]byte, bool, error) {
+	switch name {
+	case "VarToUint32", "uint32":
+		bytes, err := c.compileNumericCast(VarTypeU32, args)
+		return bytes, true, err
+	case "VarToInt32", "int32":
+		bytes, err := c.compileNumericCast(VarTypeS32, args)
+		return bytes, true, err
+	case "VarToFloat32", "float32":
+		bytes, err := c.compileNumericCast(VarTypeF32, args)
+		return bytes, true, err
+	case "VarAssign":
+		bytes, err := c.compileAssignIntrinsic(args)
+		return bytes, true, err
+	case "VarEq":
+		bytes, err := c.compileBinaryIntrinsic(args, OpEQ)
+		return bytes, true, err
+	case "VarLt":
+		bytes, err := c.compileBinaryIntrinsic(args, OpL)
+		return bytes, true, err
+	case "VarLe":
+		bytes, err := c.compileBinaryIntrinsic(args, OpLE)
+		return bytes, true, err
+	case "VarGt":
+		bytes, err := c.compileBinaryIntrinsic(args, OpG)
+		return bytes, true, err
+	case "VarGe":
+		bytes, err := c.compileBinaryIntrinsic(args, OpGE)
+		return bytes, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
+func writePushVarRef(buf *bytes.Buffer, ref VarRef) error {
+	buf.WriteByte(byte(OpPushVar))
+	return writePackedVarRef(buf, ref)
+}
+
+func (c *Compiler) CompiledConsts() []Var {
+	consts := make([]Var, c.nextConstIndex)
+	for _, variable := range c.numericConstants {
+		consts[variable.Index] = variable
+	}
+	for _, variable := range c.stringConstants {
+		consts[variable.Index] = variable
+	}
+	return consts
+}
+
+func (c *Compiler) allocateBlock(scope BlockScope) *Block {
 	id := c.nextBlockID
 	c.nextBlockID++
-	b := &Block{ID: id, LocalCount: 0, Bytes: make([]byte, 0)}
+	b := &Block{ID: id, Scope: scope, LocalCount: 0, Bytes: make([]byte, 0)}
 	c.blocks[id] = b
 	return b
 }
 
-func writePackedID(buf *bytes.Buffer, id ID) error {
-	if id.Idx > idIndexMask {
-		return fmt.Errorf("id index %d exceeds 24-bit limit", id.Idx)
+func (c *Compiler) AllocateBlock() *Block {
+	return c.allocateBlock(BlockScopeFrame)
+}
+
+func (c *Compiler) AllocateSubBlock() *Block {
+	return c.allocateBlock(BlockScopeSub)
+}
+
+func writePackedVarRef(buf *bytes.Buffer, ref VarRef) error {
+	if ref.Index > varRefIndexMask {
+		return fmt.Errorf("var ref index %d exceeds 24-bit limit", ref.Index)
 	}
-	return binary.Write(buf, binary.LittleEndian, id.Pack())
+	return binary.Write(buf, binary.LittleEndian, ref.Pack())
 }
 
-func writeConstValue(buf *bytes.Buffer, constType ConstType, value any) error {
-	buf.WriteByte(byte(OpPushConst))
-	buf.WriteByte(byte(constType))
-	return binary.Write(buf, binary.LittleEndian, value)
-}
-
-func writeUnsignedConst(buf *bytes.Buffer, value uint32) error {
+func varTypeForUnsignedLiteral(value uint32) VarType {
 	switch {
 	case value <= math.MaxUint8:
-		return writeConstValue(buf, ConstTypeU8, uint8(value))
+		return VarTypeU8
 	case value <= math.MaxUint16:
-		return writeConstValue(buf, ConstTypeU16, uint16(value))
+		return VarTypeU16
 	default:
-		return writeConstValue(buf, ConstTypeU32, value)
+		return VarTypeU32
 	}
 }
 
-func writeSignedConst(buf *bytes.Buffer, value int32) error {
+func varTypeForSignedLiteral(value int32) VarType {
 	switch {
 	case value >= math.MinInt8 && value <= math.MaxInt8:
-		return writeConstValue(buf, ConstTypeS8, int8(value))
+		return VarTypeS8
 	case value >= math.MinInt16 && value <= math.MaxInt16:
-		return writeConstValue(buf, ConstTypeS16, int16(value))
+		return VarTypeS16
 	default:
-		return writeConstValue(buf, ConstTypeS32, value)
+		return VarTypeS32
 	}
-}
-
-func writeFloatConst(buf *bytes.Buffer, value float64) error {
-	return writeConstValue(buf, ConstTypeF32, math.Float32bits(float32(value)))
 }
 
 func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
@@ -96,11 +326,16 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 	hasExplicitReturn := false
 
 	// Backup parent scope context if entering a sub-block/branch
-	parentLocals := make(map[string]ID)
+	parentLocals := make(map[string]VarRef)
 	for k, v := range c.localsMap {
 		parentLocals[k] = v
 	}
+	parentLocalVars := make(map[string]Var)
+	for k, v := range c.localVars {
+		parentLocalVars[k] = v
+	}
 	parentLocalIdx := c.nextLocalIdx
+	block.InheritedLocals = parentLocalIdx
 
 	for _, stmt := range stmts {
 		switch s := stmt.(type) {
@@ -131,9 +366,9 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 				name := lhsIdent.Name
 
 				// Branch A: Target is a predefined global variable ID
-				if globalID, isGlobal := c.globalVarMap[name]; isGlobal {
+				if globalRef, isGlobal := c.lookupGlobalRef(name); isGlobal {
 					buf.WriteByte(byte(OpPopVar))
-					if err := writePackedID(&buf, globalID); err != nil {
+					if err := writePackedVarRef(&buf, globalRef); err != nil {
 						return err
 					}
 					continue
@@ -143,8 +378,9 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 				localIdx, isRegistered := c.localsMap[name]
 				if !isRegistered {
 					// Register a new local variable slot
-					localIdx = ID{Type: LocalIDType, Idx: c.nextLocalIdx}
+					localIdx = LocalRef(c.nextLocalIdx)
 					c.localsMap[name] = localIdx
+					c.localVars[name] = Var{Index: uint16(localIdx.Index), Type: VarTypeU32}
 					c.nextLocalIdx++
 
 					// Keep track of the highest local slot count reached in this block context
@@ -154,15 +390,19 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 				}
 
 				buf.WriteByte(byte(OpSetLocal))
-				if err := writePackedID(&buf, localIdx); err != nil {
+				if err := writePackedVarRef(&buf, localIdx); err != nil {
 					return err
 				}
 			}
 
 		case *ast.IfStmt:
-			condBlock := c.AllocateBlock()
-			trueBlock := c.AllocateBlock()
-			falseBlock := c.AllocateBlock()
+			condBlock := c.AllocateSubBlock()
+			trueBlock := c.AllocateSubBlock()
+			falseBlock := c.AllocateSubBlock()
+			condBlock.InheritedLocals = c.nextLocalIdx
+			condBlock.LocalCount = c.nextLocalIdx
+			falseBlock.InheritedLocals = c.nextLocalIdx
+			falseBlock.LocalCount = c.nextLocalIdx
 
 			// Sub-blocks automatically inherit access to parent local registries
 			condBytes, err := c.compileExpression(s.Cond)
@@ -170,6 +410,7 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 				return err
 			}
 			condBlock.Bytes = append(condBytes, byte(OpReturn), 1)
+			condBlock.Consts = c.CompiledConsts()
 
 			if err := c.CompileBlock(trueBlock, s.Body.List); err != nil {
 				return err
@@ -210,9 +451,11 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 	}
 
 	block.Bytes = buf.Bytes()
+	block.Consts = c.CompiledConsts()
 
 	// Restore parent local scope tracking boundaries upon exit
 	c.localsMap = parentLocals
+	c.localVars = parentLocalVars
 	c.nextLocalIdx = parentLocalIdx
 	return nil
 }
@@ -230,7 +473,8 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 			if err != nil {
 				return nil, fmt.Errorf("unsupported int literal %q: %w", e.Value, err)
 			}
-			if err := writeUnsignedConst(&buf, uint32(val)); err != nil {
+			id := c.internNumericConstant(varTypeForUnsignedLiteral(uint32(val)), uint32(val))
+			if err := writePushVarRef(&buf, id); err != nil {
 				return nil, err
 			}
 		}
@@ -239,7 +483,18 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 			if err != nil {
 				return nil, fmt.Errorf("unsupported float literal %q: %w", e.Value, err)
 			}
-			if err := writeFloatConst(&buf, val); err != nil {
+			id := c.internNumericConstant(VarTypeF32, math.Float32bits(float32(val)))
+			if err := writePushVarRef(&buf, id); err != nil {
+				return nil, err
+			}
+		}
+		if e.Kind == token.STRING {
+			literal, err := strconv.Unquote(e.Value)
+			if err != nil {
+				return nil, fmt.Errorf("unsupported string literal %q: %w", e.Value, err)
+			}
+			id := c.internStringConstant(literal)
+			if err := writePushVarRef(&buf, id); err != nil {
 				return nil, err
 			}
 		}
@@ -256,7 +511,8 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 					if err != nil {
 						return nil, fmt.Errorf("unsupported int literal -%s: %w", lit.Value, err)
 					}
-					if err := writeSignedConst(&buf, int32(val)); err != nil {
+					id := c.internNumericConstant(varTypeForSignedLiteral(int32(val)), uint32(int32(val)))
+					if err := writePushVarRef(&buf, id); err != nil {
 						return nil, err
 					}
 				case token.FLOAT:
@@ -264,7 +520,8 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 					if err != nil {
 						return nil, fmt.Errorf("unsupported float literal -%s: %w", lit.Value, err)
 					}
-					if err := writeFloatConst(&buf, val); err != nil {
+					id := c.internNumericConstant(VarTypeF32, math.Float32bits(float32(val)))
+					if err := writePushVarRef(&buf, id); err != nil {
 						return nil, err
 					}
 				default:
@@ -273,7 +530,7 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 				return buf.Bytes(), nil
 			}
 
-			if err := writeUnsignedConst(&buf, 0); err != nil {
+			if err := writePushVarRef(&buf, c.internNumericConstant(VarTypeU8, 0)); err != nil {
 				return nil, err
 			}
 			operandBytes, err := c.compileExpression(e.X)
@@ -294,16 +551,15 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 		// 1. Check if the identifier maps to an active local stack variable slot
 		if localIdx, isLocal := c.localsMap[name]; isLocal {
 			buf.WriteByte(byte(OpGetLocal))
-			if err := writePackedID(&buf, localIdx); err != nil {
+			if err := writePackedVarRef(&buf, localIdx); err != nil {
 				return nil, err
 			}
 			return buf.Bytes(), nil
 		}
 
 		// 2. Check if it maps to a global predefined variable ID
-		if globalID, isGlobal := c.globalVarMap[name]; isGlobal {
-			buf.WriteByte(byte(OpPushVar))
-			if err := writePackedID(&buf, globalID); err != nil {
+		if globalRef, isGlobal := c.lookupGlobalRef(name); isGlobal {
+			if err := writePushVarRef(&buf, globalRef); err != nil {
 				return nil, err
 			}
 			return buf.Bytes(), nil
@@ -347,19 +603,28 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 		}
 
 	case *ast.CallExpr:
-		ident, ok := e.Fun.(*ast.Ident)
+		name, ok := unwrapCallName(e.Fun)
 		if !ok {
 			return nil, fmt.Errorf("dynamic pointer targets forbidden")
 		}
-		sysID, ok := c.systemInterface.RegisterSystemCall(ident.Name)
-		if !ok {
-			return nil, fmt.Errorf("unknown syscall: %s", ident.Name)
+
+		if intrinsicBytes, handled, err := c.compileIntrinsicCall(name, e.Args); handled {
+			if err != nil {
+				return nil, err
+			}
+			return intrinsicBytes, nil
 		}
-		for _, arg := range e.Args {
+
+		sysID, ok := c.systemInterface.RegisterSystemCall(name)
+		if !ok {
+			return nil, fmt.Errorf("unknown syscall: %s", name)
+		}
+		for argIndex, arg := range e.Args {
 			argBytes, err := c.compileExpression(arg)
 			if err != nil {
 				return nil, err
 			}
+			_ = argIndex
 			buf.Write(argBytes)
 		}
 		buf.WriteByte(byte(OpSyscall))

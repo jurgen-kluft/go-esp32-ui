@@ -1,18 +1,16 @@
 package pages
 
 import (
-	"fmt"
-
 	. "github.com/jurgen-kluft/go-esp32-ui/ui"
 )
 
-func RendeOverview() {
+func RenderOverview() {
 	// 1. Establish a clean frame baseline by flooding the 480x480 canvas via hardware
 	ClearScreen(ColorCharcoal)
 
 	// 2. Global Top Border & Navigation Banner
-	DrawSprite(0, 0, "bg/charcoal_top_banner.png")
-	DrawText(20, 15, FontMain, ColorWhite, "Overview")
+	DrawSprite(0, 0, BgCharcoalTopBanner)
+	DrawText(FontMain, "Overview", 20, 15, ColorWhite)
 
 	// 3. STATE ROUTING LAYER A: Standard Operational Grid View
 	// 4 floors (4 row buttons, one for each floor):
@@ -24,7 +22,7 @@ func RendeOverview() {
 	// Then when pressing a room you will be presented with a page to control the lights in that room.
 	// You will be able to navigate back to the room selection page and then back to the floor selection page, you
 	// can do that by swiping from right to left on the screen, this will take you back to the previous page.
-	if UiMode == ModeStandardGrid {
+	if VarEq(UIMode, ModeStandardGrid) {
 
 		// Define UI Grid positioning constraints natively in Go
 		const startX = 40
@@ -33,97 +31,99 @@ func RendeOverview() {
 		const spacing = 140
 
 		// Small date on the left top corner of the grid
-		DrawText(20, 60, FontSmall, ColorWhite, dateString)
+		DrawVar(FontSmall, DateString, 20, 60, ColorWhite)
 
 		// Small time on the right top corner of the grid
-		DrawText(400, 60, FontSmall, ColorWhite, timeString)
+		DrawVar(FontSmall, TimeString, 400, 60, ColorWhite)
 
 		// Grid Column 0, Row 0: Main Ceiling Light Button Container
-		if LightIsOn("F1.Bathroom.CeilingLight") {
-			DrawSprite(startX, startY, "buttons/btn_gold_on_120x120.png")
-			DrawText(startX+15, startY+80, FontSmall, ColorWhite, "Ceiling (ON)")
+		if IsLightOn(GroundfloorBathroomCeilingLight_State) {
+			DrawSprite(startX, startY, BtnGoldOn120x120)
+			DrawText(FontSmall, "Ceiling (ON)", startX+15, startY+80, ColorWhite)
 		} else {
-			DrawSprite(startX, startY, "buttons/btn_grey_off_120x120.png")
-			DrawText(startX+15, startY+80, FontSmall, ColorWhite, "Ceiling (OFF)")
+			DrawSprite(startX, startY, BtnGoldOff120x120)
+			DrawText(FontSmall, "Ceiling (OFF)", startX+15, startY+80, ColorWhite)
 		}
 
 		// Single-Tap: Instantly toggles the light status variable locally on the ESP32
 		RegisterZone(startX, startY, btnSize, btnSize, GestureTap, func() {
-			if LightIsOn("F1.Bathroom.CeilingLight") {
-				SetLightStatus("F1.Bathroom.CeilingLight", 0)
+			if IsLightOn(GroundfloorBathroomCeilingLight_State) {
+				SetLightOnOff(GroundfloorBathroomCeilingLight_State, 0)
 			} else {
-				SetLightStatus("F1.Bathroom.CeilingLight", 1)
+				SetLightOnOff(GroundfloorBathroomCeilingLight_State, 1)
 			}
 		})
 
 		// Press & Hold: Hides the main grid and enters the advanced multi-touch dimmer overlay
 		RegisterZone(startX, startY, btnSize, btnSize, GestureHold, func() {
-			UiMode = ModeDimmerOverlay
+			VarAssign(&UIMode, ModeDimmerOverlay)
 		})
 
 		// Grid Column 1, Row 0: Mirror Light Button Container
-		if LightIsOn("F1.Bathroom.MirrorLight") {
-			DrawSprite(startX+spacing, startY, "buttons/btn_gold_on_120x120.png")
-			DrawText(startX+spacing+20, startY+80, FontSmall, ColorWhite, "Mirror (ON)")
+		if IsLightOn(GroundfloorBathroomMirrorLight_State) {
+			DrawSprite(startX+spacing, startY, BtnGoldOn120x120)
+			DrawText(FontSmall, "Mirror (ON)", startX+spacing+20, startY+80, ColorWhite)
 		} else {
-			DrawSprite(startX+spacing, startY, "buttons/btn_grey_off_120x120.png")
-			DrawText(startX+spacing+20, startY+80, FontSmall, ColorWhite, "Mirror (OFF)")
+			DrawSprite(startX+spacing, startY, BtnGreyOff120x120)
+			DrawText(FontSmall, "Mirror (OFF)", startX+spacing+20, startY+80, ColorWhite)
 		}
 
 		RegisterZone(startX+spacing, startY, btnSize, btnSize, GestureTap, func() {
-			if LightIsOn("F1.Bathroom.MirrorLight") {
-				SetLightStatus("F1.Bathroom.MirrorLight", 0)
+			if IsLightOn(GroundfloorBathroomMirrorLight_State) {
+				SetLightOnOff(GroundfloorBathroomMirrorLight_State, 0)
 			} else {
-				SetLightStatus("F1.Bathroom.MirrorLight", 1)
+				SetLightOnOff(GroundfloorBathroomMirrorLight_State, 1)
 			}
 		})
 
 		// --- DOUBLE TAP SCREEN ESCAPE ACCELERATOR ---
 		// A double-tap anywhere on the main body bounds returns the user to the Floor Overview layout
 		RegisterZone(0, 50, 480, 430, GestureDoubleTap, func() {
-			UiMode = ModeFloorOverview
+			VarAssign(&UIMode, ModeFloorOverview)
 		})
 	}
 
 	// 4. STATE ROUTING LAYER B: Advanced Multi-Touch Dimmer Overlay View
-	if UiMode == ModeDimmerOverlay {
+	if VarEq(UIMode, ModeDimmerOverlay) {
 		// Blit a pre-rendered translucent black mask to fade back the underlying screen elements safely
-		DrawSprite(0, 0, "overlays/dim_backdrop.png")
+		DrawSprite(0, 0, OverlayDimBackdrop)
 
 		// Render the modal overlay popup dialogue block frame
-		DrawSprite(60, 100, "overlays/slider_card_360x280.png")
-		DrawText(90, 130, FontMain, ColorBlack, "Ceiling Brightness")
+		DrawSprite(60, 100, OverlaySliderCard360x280)
+		DrawText(FontMain, "Ceiling Brightness", 90, 130, ColorBlack)
 
 		// Display current slider value via text tracking variable changes dynamically
 		// (In a future step, our text compile pipeline will evaluate this variable)
-		DrawText(90, 170, FontSmall, ColorDarkGrey, fmt.Sprintf("Intensity: %d%%", GetLightBrightness("F1.Bathroom.CeilingLight")))
+		//DrawText(90, 170, FontSmall, ColorDarkGrey, fmt.Sprintf("Intensity: %d%%", GetLightBrightness("F1.Bathroom.CeilingLight")))
+		DrawText(FontSmall, "Intensity:", 90, 170, ColorDarkGrey)
+		DrawVar(FontSmall, GroundfloorBathroomCeilingLight_Brightness, 200, 170, ColorDarkGrey)
 
 		// --- ADVANCED SLIDER DRAG GESTURE ---
 		// We track the slider bar boundaries. While Finger 1 slides horizontally inside it,
 		// the AST compiler translates the algebraic formula into postfix stack evaluation math.
 		// Target Variable = (Finger1X_Coordinate - Box_Left_Offset) * Scale_Multiplier / Effective_Box_Width
 		RegisterZone(90, 220, 300, 60, GestureSlide, func() {
-			SetLightBrightness("F1.Bathroom.CeilingLight", uint8((Finger1X-90)*100/300))
+			SetLightBrightness(GroundfloorBathroomCeilingLight_Brightness, uint32((VarToInt32(Finger1X)-90)*100/300))
 		})
 
 		// --- CHORDED ANCHOR FINGER RELEASE FALLBACK ---
 		// Continuous boundary monitoring check. The exact microsecond the user lets go of
 		// Finger 0 (the primary finger holding down the original light button), snap back to standard grid view.
-		if Finger0State == 0 {
-			UiMode = ModeStandardGrid
+		if VarEq(Finger0State, 0) {
+			VarAssign(&UIMode, ModeStandardGrid)
 		}
 	}
 
 	// 5. STATE ROUTING LAYER C: General Event Notification Screen Overlay
-	if UiMode == ModeRainingOverlay {
+	if VarEq(UIMode, ModeRainingOverlay) {
 		// Full screen override for urgent sensor alerts (Suddenly-Raining, Washing-Finished)
-		DrawSprite(0, 0, "overlays/alert_rain_fullscreen.png")
-		DrawText(120, 200, FontMain, ColorWhite, "Suddenly Raining!")
-		DrawText(80, 260, FontSmall, ColorWhite, "Tap anywhere to close warning notification")
+		DrawSprite(0, 0, OverlayRainFullscreen)
+		DrawText(FontMain, "Suddenly Raining!", 120, 200, ColorWhite)
+		DrawText(FontSmall, "Tap anywhere to close warning notification", 80, 260, ColorWhite)
 
 		// Dismiss overlay immediately on click touch anywhere
 		RegisterZone(0, 0, 480, 480, GestureTap, func() {
-			UiMode = ModeStandardGrid
+			VarAssign(&UIMode, ModeStandardGrid)
 		})
 	}
 }

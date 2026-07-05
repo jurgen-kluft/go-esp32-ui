@@ -9,7 +9,7 @@ const (
 	SystemCallDrawVar            SystemCallID = 4
 	SystemCallStartTimer         SystemCallID = 5
 	SystemCallStopTimer          SystemCallID = 6
-	SystemCallGetTimer           SystemCallID = 7
+	SystemCallIsTimerDone        SystemCallID = 7
 	SystemCallSetLightOnOff      SystemCallID = 8
 	SystemCallIsLightOn          SystemCallID = 9
 	SystemCallSetLightBrightness SystemCallID = 10
@@ -21,24 +21,19 @@ const (
 type VmSystemInterface interface {
 	DrawBackground(imageID uint32)
 	DrawSprite(spriteID, x, y uint32)
-	DrawText(fontID, textID, x, y, color uint32)
-	DrawVar(fontID, varID, x, y, color uint32)
+	DrawText(fontID uint32, text string, x, y, color uint32)
+	DrawVar(fontID uint32, _var uint32, x, y, color uint32)
 
 	StartTimer(timerID, duration uint32)
 	StopTimer(timerID uint32)
-	GetTimer(timerID uint32) uint32
+	IsTimerDone(timerID uint32) bool
 
 	SetLightOnOff(lightID, onOff uint32)
-	IsLightOn(lightID uint32) uint32
+	IsLightOn(lightID uint32) bool
 	SetLightBrightness(lightID, brightness uint32)
 	GetLightBrightness(lightID uint32) uint32
 	SetLightColor(lightID, color uint32)
 	GetLightColor(lightID uint32) uint32
-}
-
-type VmGlobalStateInterface interface {
-	GetGlobalVar(id ID) (uint32, bool)
-	SetGlobalVar(id ID, value uint32) bool
 }
 
 type CompilerSystemInterface interface {
@@ -61,7 +56,7 @@ func NewCompilerSystemCalls() CompilerSystemInterface {
 
 	csc.systemCallMap["StartTimer"] = uint8(SystemCallStartTimer)
 	csc.systemCallMap["StopTimer"] = uint8(SystemCallStopTimer)
-	csc.systemCallMap["GetTimer"] = uint8(SystemCallGetTimer)
+	csc.systemCallMap["IsTimerDone"] = uint8(SystemCallIsTimerDone)
 
 	csc.systemCallMap["SetLightOnOff"] = uint8(SystemCallSetLightOnOff)
 	csc.systemCallMap["IsLightOn"] = uint8(SystemCallIsLightOn)

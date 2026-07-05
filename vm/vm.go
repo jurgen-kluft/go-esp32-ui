@@ -7,20 +7,20 @@ import (
 )
 
 const (
-	TypeVariableU8  uint8 = 1
-	TypeVariableU16 uint8 = 2
-	TypeVariableU32 uint8 = 3
-	TypeVariableS8  uint8 = 4
-	TypeVariableS16 uint8 = 5
-	TypeVariableS32 uint8 = 6
-	TypeVariableF32 uint8 = 7
+	defaultDataStackCapacity = 256
+	defaultLocalArenaSize    = 256
+	defaultTempArenaSize     = 256
+	defaultScratchSize       = 16
 )
 
 // VMBlock represents the loaded executable chunks inside the VM
 type VMBlock struct {
-	ID         uint32
-	LocalCount uint32
-	Bytes      []byte
+	ID              uint32
+	Scope           BlockScope
+	InheritedLocals uint32
+	LocalCount      uint32
+	Bytes           []byte
+	Consts          []Var
 }
 
 // CallFrame tracks the context of an executing block
@@ -28,15 +28,24 @@ type CallFrame struct {
 	BlockID      uint32
 	PC           uint32
 	FramePointer uint32 // Index in the data stack where this block's locals begin
+	StackBase    uint32
+	LocalMark    uint32
+	TempMark     uint32
 }
 
 type VM struct {
-	Blocks map[uint32]VMBlock
-	//GlobalState map[uint32]uint32 // Predefined shared external variables
-	GlobalState VmGlobalStateInterface
+	Blocks  map[uint32]VMBlock
+	Globals []Var
 
 	// Evaluation and Storage Stack
-	DataStack []Value
+	DataStack  []*Var
+	TempArena  []Var
+	LocalArena []Var
+	tempTop    uint32
+	localTop   uint32
+
+	SyscallArgsScratch [defaultScratchSize]*Var
+	ReturnScratch      [defaultScratchSize]*Var
 
 	// Frame Call Stack
 	CallStack    []CallFrame
@@ -45,197 +54,259 @@ type VM struct {
 	SysCalls VmSystemInterface
 }
 
-func NewVirtualMachine(systemCalls VmSystemInterface, globalState VmGlobalStateInterface) *VM {
+func NewVirtualMachine(systemCalls VmSystemInterface, globals []Var) *VM {
 	return &VM{
-		Blocks:      make(map[uint32]VMBlock),
-		GlobalState: globalState,
-		DataStack:   make([]Value, 0, 256),
-		CallStack:   make([]CallFrame, 0, 16),
-		SysCalls:    systemCalls,
+		Blocks:     make(map[uint32]VMBlock),
+		Globals:    globals,
+		DataStack:  make([]*Var, 0, defaultDataStackCapacity),
+		LocalArena: make([]Var, defaultLocalArenaSize),
+		TempArena:  make([]Var, defaultTempArenaSize),
+		CallStack:  make([]CallFrame, 0, 16),
+		SysCalls:   systemCalls,
 	}
 }
 
-func valueKindFromConstType(constType ConstType) ValueKind {
-	switch constType {
-	case ConstTypeS8, ConstTypeS16, ConstTypeS32:
-		return ValueKindS32
-	case ConstTypeF32:
-		return ValueKindF32
-	default:
-		return ValueKindU32
+func (vm *VM) allocTempVar(varType VarType, flags VarFlag, value any) *Var {
+	if vm.tempTop >= uint32(len(vm.TempArena)) {
+		panic("vm temp arena exhausted")
 	}
+	slot := &vm.TempArena[vm.tempTop]
+	slot.Index = uint16(vm.tempTop + 1)
+	slot.Type = varType
+	slot.Flags = flags | VarFlagTemp
+	slot.Value = value
+	vm.tempTop++
+	return slot
 }
 
-func valueKindFromStorageType(storageType uint8) ValueKind {
-	switch storageType {
-	case TypeVariableS8, TypeVariableS16, TypeVariableS32:
-		return ValueKindS32
-	case TypeVariableF32:
-		return ValueKindF32
-	default:
-		return ValueKindU32
+func (vm *VM) allocLocalVar(localIndex uint32) *Var {
+	if vm.localTop >= uint32(len(vm.LocalArena)) {
+		panic("vm local arena exhausted")
 	}
+	slot := &vm.LocalArena[vm.localTop]
+	slot.Index = uint16(localIndex)
+	slot.Type = VarTypeU32
+	slot.Flags = VarFlagNone
+	slot.Value = uint32(0)
+	vm.localTop++
+	return slot
 }
 
-func (vm *VM) pushValue(value Value) {
-	vm.DataStack = append(vm.DataStack, value)
+func (vm *VM) pushVar(variable *Var) {
+	vm.DataStack = append(vm.DataStack, variable)
 }
 
-func (vm *VM) popValue() Value {
+func (vm *VM) popVar() *Var {
 	topIdx := len(vm.DataStack) - 1
-	value := vm.DataStack[topIdx]
+	variable := vm.DataStack[topIdx]
 	vm.DataStack = vm.DataStack[:topIdx]
-	return value
+	return variable
 }
 
-func (vm *VM) pushStoredValue(storageType uint8, bits uint32) {
-	vm.pushValue(Value{Kind: valueKindFromStorageType(storageType), Bits: bits})
-}
-
-func (vm *VM) binaryResultKind(left, right Value) ValueKind {
-	if left.Kind == ValueKindF32 || right.Kind == ValueKindF32 {
-		return ValueKindF32
+func (vm *VM) globalVar(index uint32) (*Var, bool) {
+	if index >= uint32(len(vm.Globals)) {
+		return nil, false
 	}
-	if left.Kind == ValueKindS32 || right.Kind == ValueKindS32 {
-		return ValueKindS32
-	}
-	return ValueKindU32
+	variable := &vm.Globals[index]
+	return variable, variable.IsSet()
 }
 
-func (vm *VM) comparisonResult(ok bool) Value {
+func (vm *VM) constVar(block VMBlock, index uint32) (*Var, bool) {
+	if index >= uint32(len(block.Consts)) {
+		return nil, false
+	}
+	return &block.Consts[index], true
+}
+
+func (vm *VM) resolveVarRef(block VMBlock, rawID uint32) (*Var, bool) {
+	ref := UnpackVarRef(rawID)
+	switch ref.Storage {
+	case GlobalRefType:
+		return vm.globalVar(ref.Index)
+	case ConstRefType:
+		return vm.constVar(block, ref.Index)
+	case LocalRefType:
+		stackIndex := vm.CurrentFrame.FramePointer + ref.Index
+		if stackIndex >= uint32(len(vm.DataStack)) {
+			return nil, false
+		}
+		return vm.DataStack[stackIndex], true
+	default:
+		return nil, false
+	}
+}
+
+func (vm *VM) binaryResultType(left, right *Var) VarType {
+	if isFloatVarType(left.Type) || isFloatVarType(right.Type) {
+		return VarTypeF32
+	}
+	if isSignedVarType(left.Type) || isSignedVarType(right.Type) {
+		return VarTypeS32
+	}
+	return VarTypeU32
+}
+
+func (vm *VM) comparisonResult(ok bool) *Var {
 	if ok {
-		return Value{Kind: ValueKindU32, Bits: 1}
+		return vm.allocTempVar(VarTypeBool, VarFlagNone, true)
 	}
-	return Value{Kind: ValueKindU32, Bits: 0}
+	return vm.allocTempVar(VarTypeBool, VarFlagNone, false)
 }
 
-func (vm *VM) applyBinaryOp(opType BinaryOpType, left, right Value) Value {
-	resultKind := vm.binaryResultKind(left, right)
+func (vm *VM) applyBinaryOp(opType BinaryOpType, left, right *Var) *Var {
+	resultType := vm.binaryResultType(left, right)
 
 	switch opType {
 	case OpAdd:
-		switch resultKind {
-		case ValueKindF32:
-			return Value{Kind: ValueKindF32, Bits: math.Float32bits(left.AsFloat32() + right.AsFloat32())}
-		case ValueKindS32:
-			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() + right.AsInt32())}
+		switch resultType {
+		case VarTypeF32:
+			return vm.allocTempVar(VarTypeF32, VarFlagNone, left.AsFloat32()+right.AsFloat32())
+		case VarTypeS32:
+			return vm.allocTempVar(VarTypeS32, VarFlagNone, left.AsInt32()+right.AsInt32())
 		default:
-			return Value{Kind: ValueKindU32, Bits: left.AsUint32() + right.AsUint32()}
+			return vm.allocTempVar(VarTypeU32, VarFlagNone, left.AsUint32()+right.AsUint32())
 		}
 	case OpSub:
-		switch resultKind {
-		case ValueKindF32:
-			return Value{Kind: ValueKindF32, Bits: math.Float32bits(left.AsFloat32() - right.AsFloat32())}
-		case ValueKindS32:
-			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() - right.AsInt32())}
+		switch resultType {
+		case VarTypeF32:
+			return vm.allocTempVar(VarTypeF32, VarFlagNone, left.AsFloat32()-right.AsFloat32())
+		case VarTypeS32:
+			return vm.allocTempVar(VarTypeS32, VarFlagNone, left.AsInt32()-right.AsInt32())
 		default:
-			return Value{Kind: ValueKindU32, Bits: left.AsUint32() - right.AsUint32()}
+			return vm.allocTempVar(VarTypeU32, VarFlagNone, left.AsUint32()-right.AsUint32())
 		}
 	case OpMul:
-		switch resultKind {
-		case ValueKindF32:
-			return Value{Kind: ValueKindF32, Bits: math.Float32bits(left.AsFloat32() * right.AsFloat32())}
-		case ValueKindS32:
-			return Value{Kind: ValueKindS32, Bits: uint32(left.AsInt32() * right.AsInt32())}
+		switch resultType {
+		case VarTypeF32:
+			return vm.allocTempVar(VarTypeF32, VarFlagNone, left.AsFloat32()*right.AsFloat32())
+		case VarTypeS32:
+			return vm.allocTempVar(VarTypeS32, VarFlagNone, left.AsInt32()*right.AsInt32())
 		default:
-			return Value{Kind: ValueKindU32, Bits: left.AsUint32() * right.AsUint32()}
+			return vm.allocTempVar(VarTypeU32, VarFlagNone, left.AsUint32()*right.AsUint32())
 		}
 	case OpDiv:
-		switch resultKind {
-		case ValueKindF32:
+		switch resultType {
+		case VarTypeF32:
 			leftValue := left.AsFloat32()
 			rightValue := right.AsFloat32()
 			if rightValue == 0 {
 				if leftValue < 0 {
-					return Value{Kind: ValueKindF32, Bits: math.Float32bits(float32(math.Inf(-1)))}
+					return vm.allocTempVar(VarTypeF32, VarFlagNone, float32(math.Inf(-1)))
 				}
-				return Value{Kind: ValueKindF32, Bits: math.Float32bits(float32(math.Inf(1)))}
+				return vm.allocTempVar(VarTypeF32, VarFlagNone, float32(math.Inf(1)))
 			}
-			return Value{Kind: ValueKindF32, Bits: math.Float32bits(leftValue / rightValue)}
-		case ValueKindS32:
+			return vm.allocTempVar(VarTypeF32, VarFlagNone, leftValue/rightValue)
+		case VarTypeS32:
 			leftValue := left.AsInt32()
 			rightValue := right.AsInt32()
 			if rightValue == 0 {
 				if leftValue < 0 {
-					return Value{Kind: ValueKindS32, Bits: uint32(1 << 31)}
+					return vm.allocTempVar(VarTypeS32, VarFlagNone, int32(-1<<31))
 				}
-				return Value{Kind: ValueKindS32, Bits: uint32(int32(1<<31 - 1))}
+				return vm.allocTempVar(VarTypeS32, VarFlagNone, int32(1<<31-1))
 			}
-			return Value{Kind: ValueKindS32, Bits: uint32(leftValue / rightValue)}
+			return vm.allocTempVar(VarTypeS32, VarFlagNone, leftValue/rightValue)
 		default:
 			leftValue := left.AsUint32()
 			rightValue := right.AsUint32()
 			if rightValue == 0 {
-				return Value{Kind: ValueKindU32, Bits: math.MaxUint32}
+				return vm.allocTempVar(VarTypeU32, VarFlagNone, uint32(math.MaxUint32))
 			}
-			return Value{Kind: ValueKindU32, Bits: leftValue / rightValue}
+			return vm.allocTempVar(VarTypeU32, VarFlagNone, leftValue/rightValue)
 		}
 	case OpEQ:
-		switch resultKind {
-		case ValueKindF32:
+		switch resultType {
+		case VarTypeF32:
 			return vm.comparisonResult(left.AsFloat32() == right.AsFloat32())
-		case ValueKindS32:
+		case VarTypeS32:
 			return vm.comparisonResult(left.AsInt32() == right.AsInt32())
 		default:
 			return vm.comparisonResult(left.AsUint32() == right.AsUint32())
 		}
 	case OpG:
-		switch resultKind {
-		case ValueKindF32:
+		switch resultType {
+		case VarTypeF32:
 			return vm.comparisonResult(left.AsFloat32() > right.AsFloat32())
-		case ValueKindS32:
+		case VarTypeS32:
 			return vm.comparisonResult(left.AsInt32() > right.AsInt32())
 		default:
 			return vm.comparisonResult(left.AsUint32() > right.AsUint32())
 		}
 	case OpGE:
-		switch resultKind {
-		case ValueKindF32:
+		switch resultType {
+		case VarTypeF32:
 			return vm.comparisonResult(left.AsFloat32() >= right.AsFloat32())
-		case ValueKindS32:
+		case VarTypeS32:
 			return vm.comparisonResult(left.AsInt32() >= right.AsInt32())
 		default:
 			return vm.comparisonResult(left.AsUint32() >= right.AsUint32())
 		}
 	case OpL:
-		switch resultKind {
-		case ValueKindF32:
+		switch resultType {
+		case VarTypeF32:
 			return vm.comparisonResult(left.AsFloat32() < right.AsFloat32())
-		case ValueKindS32:
+		case VarTypeS32:
 			return vm.comparisonResult(left.AsInt32() < right.AsInt32())
 		default:
 			return vm.comparisonResult(left.AsUint32() < right.AsUint32())
 		}
 	case OpLE:
-		switch resultKind {
-		case ValueKindF32:
+		switch resultType {
+		case VarTypeF32:
 			return vm.comparisonResult(left.AsFloat32() <= right.AsFloat32())
-		case ValueKindS32:
+		case VarTypeS32:
 			return vm.comparisonResult(left.AsInt32() <= right.AsInt32())
 		default:
 			return vm.comparisonResult(left.AsUint32() <= right.AsUint32())
 		}
 	default:
-		return Value{Kind: ValueKindU32, Bits: 0}
+		return vm.allocTempVar(VarTypeU32, VarFlagNone, uint32(0))
 	}
 }
 
 func (vm *VM) ExecuteBlock(blockID uint32) {
-	vm.CurrentFrame = vm.allocateFrame(blockID)
+	vm.DataStack = vm.DataStack[:0]
+	vm.CallStack = vm.CallStack[:0]
+	vm.tempTop = 0
+	vm.localTop = 0
+	vm.CurrentFrame = vm.enterBlock(blockID, nil)
 	vm.executeCurrentFrame()
 }
 
-func (vm *VM) allocateFrame(blockID uint32) CallFrame {
-	// Setup the initial root call frame
+func (vm *VM) enterBlock(blockID uint32, parent *CallFrame) CallFrame {
 	block := vm.Blocks[blockID]
-	fp := uint32(len(vm.DataStack))
-
-	// Allocate blank padding spaces on the data stack for local variables
-	for i := uint32(0); i < block.LocalCount; i++ {
-		vm.pushValue(Value{Kind: ValueKindU32, Bits: 0})
+	frame := CallFrame{
+		BlockID:   blockID,
+		PC:        0,
+		StackBase: uint32(len(vm.DataStack)),
+		LocalMark: vm.localTop,
+		TempMark:  vm.tempTop,
 	}
 
-	return CallFrame{BlockID: blockID, PC: 0, FramePointer: fp}
+	if block.Scope == BlockScopeSub && parent != nil {
+		frame.FramePointer = parent.FramePointer
+	} else {
+		frame.FramePointer = uint32(len(vm.DataStack))
+	}
+
+	visibleLocals := block.LocalCount
+	if visibleLocals < block.InheritedLocals {
+		panic("vm block local metadata invalid")
+	}
+	newLocalCount := visibleLocals - block.InheritedLocals
+
+	for i := uint32(0); i < newLocalCount; i++ {
+		vm.pushVar(vm.allocLocalVar(block.InheritedLocals + i))
+	}
+
+	return frame
+}
+
+func (vm *VM) executeChildBlock(blockID uint32) {
+	vm.CallStack = append(vm.CallStack, vm.CurrentFrame)
+	parentFrame := vm.CurrentFrame
+	vm.CurrentFrame = vm.enterBlock(blockID, &parentFrame)
+	vm.executeSubLoop()
 }
 
 func (vm *VM) executeCurrentFrame() {
@@ -250,74 +321,56 @@ func (vm *VM) executeCurrentFrame() {
 		vm.CurrentFrame.PC++
 
 		switch op {
-		case OpPushConst:
-			constType := ConstType(block.Bytes[vm.CurrentFrame.PC])
-			vm.CurrentFrame.PC++
-
-			var val uint32
-			switch constType {
-			case ConstTypeU8:
-				val = uint32(block.Bytes[vm.CurrentFrame.PC])
-				vm.CurrentFrame.PC++
-			case ConstTypeU16:
-				val = uint32(binary.LittleEndian.Uint16(block.Bytes[vm.CurrentFrame.PC:]))
-				vm.CurrentFrame.PC += 2
-			case ConstTypeU32:
-				val = binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
-				vm.CurrentFrame.PC += 4
-			case ConstTypeS8:
-				val = uint32(int32(int8(block.Bytes[vm.CurrentFrame.PC])))
-				vm.CurrentFrame.PC++
-			case ConstTypeS16:
-				val = uint32(int32(int16(binary.LittleEndian.Uint16(block.Bytes[vm.CurrentFrame.PC:]))))
-				vm.CurrentFrame.PC += 2
-			case ConstTypeS32, ConstTypeF32:
-				val = binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
-				vm.CurrentFrame.PC += 4
-			default:
-				fmt.Printf("VM Error: Unknown ConstType %d\n", constType)
-				return
-			}
-			vm.pushValue(Value{Kind: valueKindFromConstType(constType), Bits: val})
-
 		case OpPushVar:
 			varID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
-			globalVar, ok := vm.GlobalState.GetGlobalVar(NewID(varID))
-			if !ok {
-				fmt.Printf("VM Error: Global variable ID %d not found\n", varID)
-				return
+			if variable, ok := vm.resolveVarRef(block, varID); ok {
+				vm.pushVar(variable)
+				break
 			}
-			vm.pushStoredValue(NewID(varID).Type, globalVar)
+			fmt.Printf("VM Error: Var reference %d not found\n", varID)
+			return
 
 		case OpPopVar:
 			varID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
-			val := vm.popValue()
-			if !vm.GlobalState.SetGlobalVar(NewID(varID), val.Bits) {
+			val := vm.popVar()
+			ref := UnpackVarRef(varID)
+			if ref.Storage != GlobalRefType {
+				fmt.Printf("VM Error: Cannot write through non-global var reference %d\n", varID)
+				return
+			}
+			globalVar, ok := vm.globalVar(ref.Index)
+			if !ok {
 				fmt.Printf("VM Error: Failed to set global variable ID %d\n", varID)
 				return
 			}
+			globalVar.Type = val.Type
+			globalVar.Flags = val.Flags
+			globalVar.Value = val.Value
 
 		case OpGetLocal:
-			localID := NewID(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))
+			localRef := UnpackVarRef(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))
 			vm.CurrentFrame.PC += 4
-			val := vm.DataStack[vm.CurrentFrame.FramePointer+localID.Idx]
-			vm.pushValue(val)
+			val := vm.DataStack[vm.CurrentFrame.FramePointer+localRef.Index]
+			vm.pushVar(val)
 
 		case OpSetLocal:
-			localID := NewID(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))
+			localRef := UnpackVarRef(binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:]))
 			vm.CurrentFrame.PC += 4
-			val := vm.popValue()
-			vm.DataStack[vm.CurrentFrame.FramePointer+localID.Idx] = val
+			val := vm.popVar()
+			localVar := vm.DataStack[vm.CurrentFrame.FramePointer+localRef.Index]
+			localVar.Type = val.Type
+			localVar.Flags = val.Flags
+			localVar.Value = val.Value
 
 		case OpBinaryOp:
 			opType := BinaryOpType(block.Bytes[vm.CurrentFrame.PC])
 			vm.CurrentFrame.PC++
 
-			right := vm.popValue()
-			left := vm.popValue()
-			vm.pushValue(vm.applyBinaryOp(opType, left, right))
+			right := vm.popVar()
+			left := vm.popVar()
+			vm.pushVar(vm.applyBinaryOp(opType, left, right))
 
 		case OpIf:
 			condBlockID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
@@ -327,27 +380,20 @@ func (vm *VM) executeCurrentFrame() {
 			falseBlockID := binary.LittleEndian.Uint32(block.Bytes[vm.CurrentFrame.PC:])
 			vm.CurrentFrame.PC += 4
 
-			// 1. Save our position and branch out to solve the condition block
-			vm.CallStack = append(vm.CallStack, vm.CurrentFrame)
-
-			// 2. Prepare and run the condition block
-			vm.CurrentFrame = vm.allocateFrame(condBlockID)
-
-			// Execute sub-loop synchronously until the condition block hits OpReturn
-			vm.executeSubLoop()
+			// 1. Solve the condition in a sub-scope that reuses the current frame.
+			vm.executeChildBlock(condBlockID)
 
 			// 3. Capture the condition boolean left on the top of the stack
-			condResult := vm.popValue()
+			condResult := vm.popVar()
 
 			// 4. Choose which structural body execution pipeline block to execute next
 			targetBlockID := falseBlockID
-			if condResult.Bits != 0 {
+			if condResult.Uint32Value() != 0 {
 				targetBlockID = trueBlockID
 			}
 
-			vm.CallStack = append(vm.CallStack, vm.CurrentFrame)
-			vm.CurrentFrame = vm.allocateFrame(targetBlockID)
-			vm.executeSubLoop()
+			// 2. Execute the chosen branch in its own sub-scope marks.
+			vm.executeChildBlock(targetBlockID)
 
 		case OpSyscall:
 			sysID := block.Bytes[vm.CurrentFrame.PC]
@@ -360,19 +406,24 @@ func (vm *VM) executeCurrentFrame() {
 		case OpReturn:
 			returnCount := block.Bytes[vm.CurrentFrame.PC]
 			vm.CurrentFrame.PC++
+			if int(returnCount) > len(vm.ReturnScratch) {
+				panic("vm return scratch exhausted")
+			}
 
 			// Extract returned values sitting on the very top of the stack frame
-			retValues := make([]Value, returnCount)
+			retValues := vm.ReturnScratch[:returnCount]
 			for i := int(returnCount) - 1; i >= 0; i-- {
-				retValues[i] = vm.popValue()
+				retValues[i] = vm.popVar()
 			}
 
 			// Clear out the entire local variable space allocated to this frame pointer context
-			vm.DataStack = vm.DataStack[:vm.CurrentFrame.FramePointer]
+			vm.DataStack = vm.DataStack[:vm.CurrentFrame.StackBase]
+			vm.localTop = vm.CurrentFrame.LocalMark
+			vm.tempTop = vm.CurrentFrame.TempMark
 
 			// Push returned values back onto parent stack frame area
 			for _, val := range retValues {
-				vm.pushValue(val)
+				vm.pushVar(val)
 			}
 			return
 		}
@@ -391,27 +442,26 @@ func (vm *VM) executeSubLoop() {
 }
 
 func (vm *VM) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
+	if int(argCount) > len(vm.SyscallArgsScratch) {
+		panic("vm syscall scratch exhausted")
+	}
 	// Extract explicit argument items out of stack memory
-	args := make([]Value, argCount)
+	args := vm.SyscallArgsScratch[:argCount]
 	for i := int(argCount) - 1; i >= 0; i-- {
-		args[i] = vm.popValue()
+		args[i] = vm.popVar()
 	}
 
 	switch sysID {
 	case uint8(SystemCallDrawBackground):
-		//vm.appendDrawLog("DrawBackground(Image: %d)", args[0])
 		vm.SysCalls.DrawBackground(args[0].AsUint32())
 
 	case uint8(SystemCallDrawSprite):
-		//vm.appendDrawLog("DrawSprite(Sprite: %d, X: %d, Y: %d)", args[0], args[1], args[2])
 		vm.SysCalls.DrawSprite(args[0].AsUint32(), args[1].AsUint32(), args[2].AsUint32())
 
 	case uint8(SystemCallDrawText):
-		//vm.appendDrawLog("DrawText(Font: %d, Text: %d, X: %d, Y: %d, Color: %d)", args[0], args[1], args[2], args[3], args[4])
-		vm.SysCalls.DrawText(args[0].AsUint32(), args[1].AsUint32(), args[2].AsUint32(), args[3].AsUint32(), args[4].AsUint32())
+		vm.SysCalls.DrawText(args[0].AsUint32(), args[1].AsString(), args[2].AsUint32(), args[3].AsUint32(), args[4].AsUint32())
 
 	case uint8(SystemCallDrawVar):
-		//vm.appendDrawLog("DrawVar(Font: %d, Var: %d, X: %d, Y: %d, Color: %d)", args[0], args[1], args[2], args[3], args[4])
 		vm.SysCalls.DrawVar(args[0].AsUint32(), args[1].AsUint32(), args[2].AsUint32(), args[3].AsUint32(), args[4].AsUint32())
 
 	case uint8(SystemCallStartTimer):
@@ -423,10 +473,10 @@ func (vm *VM) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
 		timerID := args[0]
 		vm.SysCalls.StopTimer(timerID.AsUint32())
 
-	case uint8(SystemCallGetTimer):
+	case uint8(SystemCallIsTimerDone):
 		timerID := args[0]
-		timerValue := vm.SysCalls.GetTimer(timerID.AsUint32())
-		vm.pushValue(Value{Kind: ValueKindU32, Bits: timerValue})
+		isDone := vm.SysCalls.IsTimerDone(timerID.AsUint32())
+		vm.pushVar(vm.allocTempVar(VarTypeBool, VarFlagNone, isDone))
 
 	case uint8(SystemCallSetLightOnOff):
 		lightID := args[0]
@@ -436,7 +486,7 @@ func (vm *VM) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
 	case uint8(SystemCallIsLightOn):
 		lightID := args[0]
 		status := vm.SysCalls.IsLightOn(lightID.AsUint32())
-		vm.pushValue(Value{Kind: ValueKindU32, Bits: status})
+		vm.pushVar(vm.allocTempVar(VarTypeBool, VarFlagNone, status))
 
 	case uint8(SystemCallSetLightBrightness):
 		lightID := args[0]
@@ -446,7 +496,7 @@ func (vm *VM) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
 	case uint8(SystemCallGetLightBrightness):
 		lightID := args[0]
 		brightness := vm.SysCalls.GetLightBrightness(lightID.AsUint32())
-		vm.pushValue(Value{Kind: ValueKindU32, Bits: brightness})
+		vm.pushVar(vm.allocTempVar(VarTypeU32, VarFlagNone, brightness))
 
 	case uint8(SystemCallSetLightColor):
 		lightID := args[0]
@@ -456,7 +506,7 @@ func (vm *VM) ExecuteSyscallBlock(sysID uint8, argCount uint8) {
 	case uint8(SystemCallGetLightColor):
 		lightID := args[0]
 		color := vm.SysCalls.GetLightColor(lightID.AsUint32())
-		vm.pushValue(Value{Kind: ValueKindU32, Bits: color})
+		vm.pushVar(vm.allocTempVar(VarTypeU32, VarFlagNone, color))
 
 	default:
 		fmt.Printf("VM Warning: Triggered unregistered system block execution ID %d\n", sysID)

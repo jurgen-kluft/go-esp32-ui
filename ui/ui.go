@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/jurgen-kluft/go-esp32-ui/vm"
 	"github.com/jurgen-kluft/go-gui-app/imgui"
 )
 
@@ -10,19 +11,36 @@ import (
 
 // Local memory emulation mirroring the ESP32's State Table.
 // Your menu layout reads and modifies these directly while running on the Mac.
-var (
-	UiMode           int32 = 0
-	Light1Status     int32 = 0
-	Light2Status     int32 = 0
-	Light1Brightness int32 = 0
 
-	// Read-Only Hardware Input Registers (Fed continuously by the ImGui Mouse engine)
-	Finger0State int32 = 0 // 0 = Released, 1 = Pressed
-	Finger1State int32 = 0 // 0 = Released, 1 = Pressed
-	Finger0X     int32 = 0
-	Finger0Y     int32 = 0
-	Finger1X     int32 = 0
-	Finger1Y     int32 = 0
+var (
+	UIMode = vm.Var{Index: 0, Type: vm.VarTypeU8, Value: 0}
+
+	DateString = vm.Var{Index: 4, Type: vm.VarTypeStr, Value: ""}
+	TimeString = vm.Var{Index: 5, Type: vm.VarTypeStr, Value: ""}
+
+	// Input variables for touch screen
+	Finger0State = vm.Var{Index: 6, Type: vm.VarTypeU8, Value: 0}
+	Finger1State = vm.Var{Index: 7, Type: vm.VarTypeU8, Value: 0}
+	Finger0X     = vm.Var{Index: 8, Type: vm.VarTypeU16, Value: 0}
+	Finger0Y     = vm.Var{Index: 9, Type: vm.VarTypeU16, Value: 0}
+	Finger1X     = vm.Var{Index: 10, Type: vm.VarTypeU16, Value: 0}
+	Finger1Y     = vm.Var{Index: 11, Type: vm.VarTypeU16, Value: 0}
+
+	GroundfloorBathroomCeilingLight_State      = vm.Var{Index: 0, Type: vm.VarTypeU8, Value: 0}
+	GroundfloorBathroomCeilingLight_Brightness = vm.Var{Index: 1, Type: vm.VarTypeU8, Value: 0}
+	GroundfloorBathroomMirrorLight_State       = vm.Var{Index: 2, Type: vm.VarTypeU8, Value: 0}
+	GroundfloorBathroomMirrorLight_Brightness  = vm.Var{Index: 3, Type: vm.VarTypeU8, Value: 0}
+
+	// Sprites
+	BgCharcoalTopBanner = vm.Var{Index: 11, Type: vm.VarTypeU32, Value: 0}
+
+	BtnGoldOn120x120  = vm.Var{Index: 12, Type: vm.VarTypeU32, Value: 0}
+	BtnGoldOff120x120 = vm.Var{Index: 13, Type: vm.VarTypeU32, Value: 0}
+	BtnGreyOff120x120 = vm.Var{Index: 14, Type: vm.VarTypeU32, Value: 0}
+
+	OverlayDimBackdrop       = vm.Var{Index: 15, Type: vm.VarTypeU32, Value: 0}
+	OverlaySliderCard360x280 = vm.Var{Index: 16, Type: vm.VarTypeU32, Value: 0}
+	OverlayRainFullscreen    = vm.Var{Index: 17, Type: vm.VarTypeU32, Value: 0}
 )
 
 // ============================================================================
@@ -40,16 +58,16 @@ const (
 )
 
 const (
-	FontMain  string = "inter_24"
-	FontSmall string = "inter_16"
+	FontMain  uint32 = 0
+	FontSmall uint32 = 1
 )
 
 // UI Menu State Modes
-const (
-	ModeStandardGrid   int32 = 0
-	ModeDimmerOverlay  int32 = 1
-	ModeFloorOverview  int32 = 2
-	ModeRainingOverlay int32 = 3
+var (
+	ModeStandardGrid   = 0
+	ModeDimmerOverlay  = 1
+	ModeFloorOverview  = 2
+	ModeRainingOverlay = 3
 )
 
 // Gesture Bitmask Filters
@@ -59,6 +77,38 @@ const (
 	GestureSlide     byte = 0x03
 	GestureDoubleTap byte = 0x04
 )
+
+// ============================================================================
+// 3. SYSTEM CALL INTERFACE (Compiler & VM)
+// ============================================================================
+
+func DrawBackground(imageID vm.Var) {
+
+}
+
+func SetLightOnOff(lightID vm.Var, onOff uint32) {
+
+}
+
+func IsLightOn(lightID vm.Var) bool {
+	return false
+}
+
+func SetLightBrightness(lightID vm.Var, brightness uint32) {
+
+}
+
+func GetLightBrightness(lightID vm.Var) uint32 {
+	return 0
+}
+
+func SetLightColor(lightID vm.Var, color uint32) {
+
+}
+
+func GetLightColor(lightID vm.Var) uint32 {
+	return 0
+}
 
 // ============================================================================
 // 3. SIMULATOR ENVIRONMENT ENGINE
@@ -110,7 +160,7 @@ func ClearScreen(colorVal Color) {
 }
 
 // DrawSprite simulates a raw memory blit by rendering an overlay block inside ImGui
-func DrawSprite(x, y int, path string) {
+func DrawSprite(x, y int32, path vm.Var) {
 	drawList := imgui.WindowDrawList()
 	canvasPos := imgui.CursorScreenPos()
 
@@ -119,37 +169,37 @@ func DrawSprite(x, y int, path string) {
 
 	// For simulation scaffolding, we use standard dimensions based on assets
 	w, h := float32(120), float32(120)
-	if path == "bg/charcoal_top_banner.png" {
-		w, h = 480, 50
-	} else if path == "overlays/dim_backdrop.png" {
-		w, h = 480, 480
-	} else if path == "overlays/slider_card_360x280.png" {
-		w, h = 360, 280
-	} else if path == "overlays/alert_rain_fullscreen.png" {
-		w, h = 480, 480
-	} else if path == "shapes/circle_red_50x50.png" {
-		w, h = 50, 50
-	}
+	// if path == "bg/charcoal_top_banner.png" {
+	// 	w, h = 480, 50
+	// } else if path == "overlays/dim_backdrop.png" {
+	// 	w, h = 480, 480
+	// } else if path == "overlays/slider_card_360x280.png" {
+	// 	w, h = 360, 280
+	// } else if path == "overlays/alert_rain_fullscreen.png" {
+	// 	w, h = 480, 480
+	// } else if path == "shapes/circle_red_50x50.png" {
+	// 	w, h = 50, 50
+	// }
 
 	pMax := imgui.Vec2{X: pMin.X + w, Y: pMin.Y + h}
 
 	// Choose box color highlights to look representative
 	var bgImguiColor uint32
-	if path == "overlays/dim_backdrop.png" {
-		bgImguiColor = packedColorFromRGBA(0, 0, 0, 150) // Semi-transparent fade
-	} else if path == "overlays/slider_card_360x280.png" {
-		bgImguiColor = packedColorFromRGBA(240, 240, 245, 255) // Card stock white
-	} else if path == "buttons/btn_gold_on_120x120.png" {
-		bgImguiColor = packedColorFromRGBA(212, 175, 55, 255) // Active Gold
-	} else {
-		bgImguiColor = packedColorFromRGBA(70, 70, 75, 255) // Component Dark Grey
-	}
+	// if path == "overlays/dim_backdrop.png" {
+	// 	bgImguiColor = packedColorFromRGBA(0, 0, 0, 150) // Semi-transparent fade
+	// } else if path == "overlays/slider_card_360x280.png" {
+	// 	bgImguiColor = packedColorFromRGBA(240, 240, 245, 255) // Card stock white
+	// } else if path == "buttons/btn_gold_on_120x120.png" {
+	// 	bgImguiColor = packedColorFromRGBA(212, 175, 55, 255) // Active Gold
+	// } else {
+	// 	bgImguiColor = packedColorFromRGBA(70, 70, 75, 255) // Component Dark Grey
+	// }
 
 	drawList.AddRectFilledV(pMin, pMax, bgImguiColor, 6.0, imgui.DrawFlagsRoundCornersAll)
 }
 
 // DrawText prints layout typography strings into the ImGui viewport window
-func DrawText(x, y int, font string, colorVal Color, text string) {
+func DrawText(font uint32, text string, x, y int32, colorVal Color) {
 	drawList := imgui.WindowDrawList()
 	canvasPos := imgui.CursorScreenPos()
 	pos := imgui.Vec2{X: canvasPos.X + float32(x), Y: canvasPos.Y + float32(y)}
@@ -159,6 +209,21 @@ func DrawText(x, y int, font string, colorVal Color, text string) {
 
 	r, g, b := rgb565ToRGBA(colorVal)
 	drawList.AddTextFontPtr(fontPtr, fontSize, pos, packedColorFromRGBA(r, g, b, 255), text)
+}
+
+func DrawVar(font uint32, v vm.Var, x, y int32, colorVal Color) {
+	drawList := imgui.WindowDrawList()
+	canvasPos := imgui.CursorScreenPos()
+	pos := imgui.Vec2{X: canvasPos.X + float32(x), Y: canvasPos.Y + float32(y)}
+
+	fontPtr := imgui.CurrentFont()
+	fontSize := fontPtr.LegacySize()
+
+	if v.Type == vm.VarTypeStr {
+		str := v.Value.(string)
+		r, g, b := rgb565ToRGBA(colorVal)
+		drawList.AddTextFontPtr(fontPtr, fontSize, pos, packedColorFromRGBA(r, g, b, 255), str)
+	}
 }
 
 // ============================================================================
@@ -205,7 +270,7 @@ func StopTimer(timerName string) {
 	timerDurations[id] = 0
 }
 
-func CheckTimer(timerName string) bool {
+func GetTimer(timerName string) bool {
 	id := resolveSimTimerID(timerName)
 	if !timerActive[id] {
 		return false
@@ -253,22 +318,22 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 	// 2. Core Multi-Touch Intercept Emulation Math
 	if !Env.IsShiftHeld {
 		// Finger 0 Mode: Left Mouse click acts as main finger
-		Finger0X = int32(relX)
-		Finger0Y = int32(relY)
+		Finger0X.Value = int32(relX)
+		Finger0Y.Value = int32(relY)
 		if imgui.IsMouseDown(imgui.MouseButtonLeft) {
-			Finger0State = 1
+			Finger0State.Value = 1
 		} else {
-			Finger0State = 0
+			Finger0State.Value = 0
 		}
 	} else {
 		// Finger 1 Mode (Shift Key Held): Locks Finger 0 in place
 		// and processes second tracking stream inside Finger 1 registers instead!
-		Finger1X = int32(relX)
-		Finger1Y = int32(relY)
+		Finger1X.Value = int32(relX)
+		Finger1Y.Value = int32(relY)
 		if imgui.IsMouseDown(imgui.MouseButtonLeft) {
-			Finger1State = 1
+			Finger1State.Value = 1
 		} else {
-			Finger1State = 0
+			Finger1State.Value = 0
 		}
 	}
 
@@ -302,7 +367,7 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 	}
 
 	// If a finger has stayed down without heavy panning movement, flag a long press Hold trigger
-	if imgui.IsWindowHovered() && Finger0State == 1 && !Env.IsShiftHeld {
+	if imgui.IsWindowHovered() && Finger0State.Value == 1 && !Env.IsShiftHeld {
 		// Basic fallback simulation shortcut: Clicking and holding right-mouse button
 		// can also act as an immediate shortcut for a long-press GestureHold event.
 		if imgui.IsMouseClickedBoolV(imgui.MouseButtonRight, false) || io.MouseDownDuration()[0] > 0.5 {
@@ -325,13 +390,13 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 	panelMax := imgui.Vec2{X: canvasPos.X + 480, Y: canvasPos.Y + 480}
 	drawList.AddRect(canvasPos, panelMax, packedColorFromRGBA(255, 255, 255, 50)) // Border frame boundary
 
-	if Finger0State == 1 {
-		f0Vec := imgui.Vec2{X: canvasPos.X + float32(Finger0X), Y: canvasPos.Y + float32(Finger0Y)}
+	if Finger0State.Value == 1 {
+		f0Vec := imgui.Vec2{X: canvasPos.X + Finger0X.AsFloat32(), Y: canvasPos.Y + Finger0Y.AsFloat32()}
 		drawList.AddCircleFilled(f0Vec, 10.0, packedColorFromRGBA(46, 204, 113, 200)) // Green crosshair
 		drawList.AddTextVec2(f0Vec, packedColorFromRGBA(0, 0, 0, 255), "F0")
 	}
-	if Finger1State == 1 {
-		f1Vec := imgui.Vec2{X: canvasPos.X + float32(Finger1X), Y: canvasPos.Y + float32(Finger1Y)}
+	if Finger1State.Value == 1 {
+		f1Vec := imgui.Vec2{X: canvasPos.X + Finger1X.AsFloat32(), Y: canvasPos.Y + Finger1Y.AsFloat32()}
 		drawList.AddCircleFilled(f1Vec, 10.0, packedColorFromRGBA(52, 152, 219, 200)) // Blue crosshair
 		drawList.AddTextVec2(f1Vec, packedColorFromRGBA(0, 0, 0, 255), "F1")
 	}
@@ -345,16 +410,16 @@ func evaluateActiveTouchGestures() {
 	}
 
 	// Choose which tracking stream point maps to current check targets
-	targetX := int(Finger0X)
-	targetY := int(Finger0Y)
+	targetX := Finger0X.AsInt32()
+	targetY := Finger0Y.AsInt32()
 	if Env.LastGestureFired == GestureSlide && Env.IsShiftHeld {
-		targetX = int(Finger1X)
-		targetY = int(Finger1Y)
+		targetX = Finger1X.AsInt32()
+		targetY = Finger1Y.AsInt32()
 	}
 
 	for _, zone := range Env.ActiveZones {
-		if targetX >= int(zone.X) && targetX <= int(zone.X+zone.W) &&
-			targetY >= int(zone.Y) && targetY <= int(zone.Y+zone.H) {
+		if targetX >= int32(zone.X) && targetX <= int32(zone.X+zone.W) &&
+			targetY >= int32(zone.Y) && targetY <= int32(zone.Y+zone.H) {
 			if zone.Gesture == Env.LastGestureFired {
 				zone.Action()
 

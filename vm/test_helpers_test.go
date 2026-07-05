@@ -20,7 +20,7 @@ func parseStatements(t *testing.T, body string) []ast.Stmt {
 	return decl.Body.List
 }
 
-func compileBlockForTest(t *testing.T, globals map[string]ID, body string) *Block {
+func compileBlockForTest(t *testing.T, globals map[string]VarRef, body string) *Block {
 	t.Helper()
 
 	systemInterface := NewCompilerSystemCalls()
@@ -32,7 +32,7 @@ func compileBlockForTest(t *testing.T, globals map[string]ID, body string) *Bloc
 	return block
 }
 
-func compileProgramForTest(t *testing.T, globals map[string]ID, body string) (*Compiler, *Block) {
+func compileProgramForTest(t *testing.T, globals map[string]VarRef, body string) (*Compiler, *Block) {
 	t.Helper()
 
 	systemInterface := NewCompilerSystemCalls()
@@ -46,6 +46,6 @@ func compileProgramForTest(t *testing.T, globals map[string]ID, body string) (*C
 
 func loadProgramIntoVM(vm *VM, compiler *Compiler) {
 	for id, compiledBlock := range compiler.blocks {
-		vm.Blocks[id] = VMBlock{ID: compiledBlock.ID, LocalCount: compiledBlock.LocalCount, Bytes: compiledBlock.Bytes}
+		vm.Blocks[id] = VMBlock{ID: compiledBlock.ID, Scope: compiledBlock.Scope, InheritedLocals: compiledBlock.InheritedLocals, LocalCount: compiledBlock.LocalCount, Bytes: compiledBlock.Bytes, Consts: compiledBlock.Consts}
 	}
 }
