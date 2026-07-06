@@ -7,6 +7,7 @@ import (
 type VarType uint8
 
 const (
+	VarTypeNone VarType = 0
 	VarTypeU8   VarType = 1
 	VarTypeU16  VarType = 2
 	VarTypeU32  VarType = 3
@@ -49,7 +50,7 @@ type Var struct {
 }
 
 func (v Var) IsSet() bool {
-	return v.Type != 0
+	return v.Type != VarTypeNone
 }
 
 func (v Var) HasFlag(flag VarFlag) bool {
@@ -59,6 +60,9 @@ func (v Var) HasFlag(flag VarFlag) bool {
 func (v Var) AsString() string {
 	if str, ok := v.Value.(string); ok {
 		return str
+	}
+	if str, ok := v.Value.(programImageString); ok {
+		return string(str)
 	}
 	return "?"
 }
