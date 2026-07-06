@@ -55,7 +55,7 @@ func PageOverviewFn() {
 		}
 
 		// Press & Hold: Hides the main grid and enters the advanced multi-touch dimmer overlay
-		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleHold) {
+		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleHold|GestureFinger0) {
 			VarAssign(&UIMode, ModeDimmerOverlay)
 		}
 
@@ -102,7 +102,7 @@ func PageOverviewFn() {
 		// We track the slider bar boundaries. While Finger 1 slides horizontally inside it,
 		// the AST compiler translates the algebraic formula into postfix stack evaluation math.
 		// Target Variable = (Finger1X_Coordinate - Box_Left_Offset) * Scale_Multiplier / Effective_Box_Width
-		if RegisterZone(90, 220, 300, 60, GestureSlide) {
+		if RegisterZone(90, 220, 300, 60, GestureSlide|GestureFinger1) {
 			SetLightBrightness(GroundfloorBathroomCeilingLight_Brightness, uint32((VarToInt32(Finger1X)-90)*100/300))
 		}
 

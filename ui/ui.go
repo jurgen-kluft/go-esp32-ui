@@ -71,6 +71,11 @@ var (
 	ModeRainingOverlay = 3
 )
 
+// Timer IDs
+const (
+	RainingOverlayTimerId = 0
+)
+
 // UI Pages
 const (
 	PageOverview         = 0
@@ -116,6 +121,12 @@ type GestureFlags uint8
 
 // Gesture Bitmask Filters
 const (
+	gestureKindMask uint8 = 0x0F
+
+	GestureFingerAny uint8 = 0x00
+	GestureFinger0   uint8 = 0x10
+	GestureFinger1   uint8 = 0x20
+
 	GestureNone       uint8 = 0x00
 	GestureSingleTap  uint8 = 0x01
 	GestureSingleHold uint8 = 0x02
@@ -125,26 +136,37 @@ const (
 )
 
 type SimulatorEnv struct {
-	IsShiftHeld      bool
-	LastGestureFired uint8
-	ClickTimer       float32 // Tracks time between clicks for Double-Tap logic
-	ClickCount       int
-	GestureConsumed  bool
-	HoldTriggered    bool
+	IsShiftHeld       bool
+	LastGestureFired  uint8
+	LastGestureFinger uint8
+	ClickTimer        float32 // Tracks time between clicks for Double-Tap logic
+	ClickCount        int
+	GestureConsumed   bool
+	HoldTriggered     bool
 }
 
 // Global active instance of our mock simulator environment
 var Env = &SimulatorEnv{
-	IsShiftHeld:      false,
-	LastGestureFired: GestureNone,
-	ClickTimer:       0,
-	ClickCount:       0,
-	GestureConsumed:  false,
-	HoldTriggered:    false,
+	IsShiftHeld:       false,
+	LastGestureFired:  GestureNone,
+	LastGestureFinger: GestureFingerAny,
+	ClickTimer:        0,
+	ClickCount:        0,
+	GestureConsumed:   false,
+	HoldTriggered:     false,
 }
 
-func activeGesturePoint(gesture uint8) (int, int) {
-	if gesture == GestureSlide && Env.IsShiftHeld {
+func normalizeGestureFilter(gestureFilter uint8) (gestureKind uint8, gestureFinger uint8) {
+	gestureKind = gestureFilter & gestureKindMask
+	gestureFinger = gestureFilter &^ gestureKindMask
+	if gestureFinger != GestureFinger0 && gestureFinger != GestureFinger1 {
+		gestureFinger = GestureFingerAny
+	}
+	return gestureKind, gestureFinger
+}
+
+func activeGesturePoint(finger uint8) (int, int) {
+	if finger == GestureFinger1 {
 		return int(Finger1X.AsInt32()), int(Finger1Y.AsInt32())
 	}
 	return int(Finger0X.AsInt32()), int(Finger0Y.AsInt32())
@@ -249,7 +271,7 @@ func DrawVar(font uint32, v vm.Var, x, y int32, colorVal Color) {
 // provide a simple interface to manage them in the simulator environment.
 // ============================================================================
 const (
-	maxTimers = 255
+	maxTimers = 32
 )
 
 var (
@@ -275,20 +297,17 @@ func resolveSimTimerID(name string) int {
 	return id
 }
 
-func StartTimer(timerName string, durationMs int) {
-	id := resolveSimTimerID(timerName)
+func StartTimer(id uint32, durationMs int) {
 	timerDurations[id] = int32(durationMs)
 	timerActive[id] = true
 }
 
-func StopTimer(timerName string) {
-	id := resolveSimTimerID(timerName)
+func StopTimer(id uint32) {
 	timerActive[id] = false
 	timerDurations[id] = 0
 }
 
-func GetTimer(timerName string) bool {
-	id := resolveSimTimerID(timerName)
+func IsTimerDone(id uint32) bool {
 	if !timerActive[id] {
 		return false
 	}
@@ -312,14 +331,18 @@ func RegisterZone(x, y, w, h int, gestureFilter uint8) bool {
 	if Env.LastGestureFired == GestureNone {
 		return false
 	}
-	if gestureFilter != Env.LastGestureFired {
+	gestureKind, gestureFinger := normalizeGestureFilter(gestureFilter)
+	if gestureKind != Env.LastGestureFired {
+		return false
+	}
+	if gestureFinger != GestureFingerAny && gestureFinger != Env.LastGestureFinger {
 		return false
 	}
 	if Env.GestureConsumed && Env.LastGestureFired != GestureSlide {
 		return false
 	}
 
-	targetX, targetY := activeGesturePoint(Env.LastGestureFired)
+	targetX, targetY := activeGesturePoint(Env.LastGestureFinger)
 	if targetX < x || targetX >= x+w || targetY < y || targetY >= y+h {
 		return false
 	}
@@ -382,6 +405,11 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 		if Env.ClickTimer > 0.3 { // Reset window after 300ms
 			if Env.ClickCount == 1 {
 				Env.LastGestureFired = GestureSingleTap
+				if Env.IsShiftHeld {
+					Env.LastGestureFinger = GestureFinger1
+				} else {
+					Env.LastGestureFinger = GestureFinger0
+				}
 			}
 			Env.ClickCount = 0
 			Env.ClickTimer = 0
@@ -393,6 +421,11 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 		Env.ClickTimer = 0
 		if Env.ClickCount == 2 {
 			Env.LastGestureFired = GestureDoubleTap
+			if Env.IsShiftHeld {
+				Env.LastGestureFinger = GestureFinger1
+			} else {
+				Env.LastGestureFinger = GestureFinger0
+			}
 			Env.ClickCount = 0
 		}
 	}
@@ -400,6 +433,11 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 	// If moving mouse while clicking down inside a zone boundary, treat it as a Slide gesture
 	if imgui.IsMouseDraggingV(imgui.MouseButtonLeft, 1.0) {
 		Env.LastGestureFired = GestureSlide
+		if Env.IsShiftHeld {
+			Env.LastGestureFinger = GestureFinger1
+		} else {
+			Env.LastGestureFinger = GestureFinger0
+		}
 	}
 
 	// If a finger has stayed down without heavy panning movement, flag a long press Hold trigger
@@ -408,6 +446,7 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 		// can also act as an immediate shortcut for a long-press GestureHold event.
 		if !Env.HoldTriggered && (imgui.IsMouseClickedBoolV(imgui.MouseButtonRight, false) || io.MouseDownDuration()[0] > 0.5) {
 			Env.LastGestureFired = GestureSingleHold
+			Env.LastGestureFinger = GestureFinger0
 			Env.HoldTriggered = true
 		}
 	}
@@ -446,6 +485,7 @@ func evaluateActiveTouchGestures() {
 
 	if Env.LastGestureFired == GestureNone {
 		Env.GestureConsumed = false
+		Env.LastGestureFinger = GestureFingerAny
 		return
 	}
 
@@ -453,10 +493,12 @@ func evaluateActiveTouchGestures() {
 		if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
 			Env.LastGestureFired = GestureNone
 			Env.GestureConsumed = false
+			Env.LastGestureFinger = GestureFingerAny
 		}
 		return
 	}
 
 	Env.LastGestureFired = GestureNone
 	Env.GestureConsumed = false
+	Env.LastGestureFinger = GestureFingerAny
 }
