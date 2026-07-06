@@ -78,6 +78,16 @@ func (s *TestSystemInterface) GetLightColor(lightID uint32) uint32 {
 	return s.LightColor[lightID]
 }
 
+func (s *TestSystemInterface) RegisterZone(zoneID, x, y, width, height uint32, gesture uint8) bool {
+	return true
+}
+
+func (s *TestSystemInterface) TurnRelayOnOff(relay int8, status int8) {
+}
+
+func (s *TestSystemInterface) SetDisplayBrightness(brightness uint8) {
+}
+
 // -----------------------------------------------------------------------------------------------------
 // -----------------------------------------------------------------------------------------------------
 

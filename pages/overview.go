@@ -4,7 +4,7 @@ import (
 	. "github.com/jurgen-kluft/go-esp32-ui/ui"
 )
 
-func RenderOverview() {
+func PageOverviewFn() {
 	// 1. Establish a clean frame baseline by flooding the 480x480 canvas via hardware
 	ClearScreen(ColorCharcoal)
 
@@ -46,18 +46,18 @@ func RenderOverview() {
 		}
 
 		// Single-Tap: Instantly toggles the light status variable locally on the ESP32
-		RegisterZone(startX, startY, btnSize, btnSize, GestureTap, func() {
+		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleTap) {
 			if IsLightOn(GroundfloorBathroomCeilingLight_State) {
 				SetLightOnOff(GroundfloorBathroomCeilingLight_State, 0)
 			} else {
 				SetLightOnOff(GroundfloorBathroomCeilingLight_State, 1)
 			}
-		})
+		}
 
 		// Press & Hold: Hides the main grid and enters the advanced multi-touch dimmer overlay
-		RegisterZone(startX, startY, btnSize, btnSize, GestureHold, func() {
+		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleHold) {
 			VarAssign(&UIMode, ModeDimmerOverlay)
-		})
+		}
 
 		// Grid Column 1, Row 0: Mirror Light Button Container
 		if IsLightOn(GroundfloorBathroomMirrorLight_State) {
@@ -68,19 +68,19 @@ func RenderOverview() {
 			DrawText(FontSmall, "Mirror (OFF)", startX+spacing+20, startY+80, ColorWhite)
 		}
 
-		RegisterZone(startX+spacing, startY, btnSize, btnSize, GestureTap, func() {
+		if RegisterZone(startX+spacing, startY, btnSize, btnSize, GestureSingleTap) {
 			if IsLightOn(GroundfloorBathroomMirrorLight_State) {
 				SetLightOnOff(GroundfloorBathroomMirrorLight_State, 0)
 			} else {
 				SetLightOnOff(GroundfloorBathroomMirrorLight_State, 1)
 			}
-		})
+		}
 
 		// --- DOUBLE TAP SCREEN ESCAPE ACCELERATOR ---
 		// A double-tap anywhere on the main body bounds returns the user to the Floor Overview layout
-		RegisterZone(0, 50, 480, 430, GestureDoubleTap, func() {
+		if RegisterZone(0, 50, 480, 430, GestureDoubleTap) {
 			VarAssign(&UIMode, ModeFloorOverview)
-		})
+		}
 	}
 
 	// 4. STATE ROUTING LAYER B: Advanced Multi-Touch Dimmer Overlay View
@@ -102,9 +102,9 @@ func RenderOverview() {
 		// We track the slider bar boundaries. While Finger 1 slides horizontally inside it,
 		// the AST compiler translates the algebraic formula into postfix stack evaluation math.
 		// Target Variable = (Finger1X_Coordinate - Box_Left_Offset) * Scale_Multiplier / Effective_Box_Width
-		RegisterZone(90, 220, 300, 60, GestureSlide, func() {
+		if RegisterZone(90, 220, 300, 60, GestureSlide) {
 			SetLightBrightness(GroundfloorBathroomCeilingLight_Brightness, uint32((VarToInt32(Finger1X)-90)*100/300))
-		})
+		}
 
 		// --- CHORDED ANCHOR FINGER RELEASE FALLBACK ---
 		// Continuous boundary monitoring check. The exact microsecond the user lets go of
@@ -122,8 +122,8 @@ func RenderOverview() {
 		DrawText(FontSmall, "Tap anywhere to close warning notification", 80, 260, ColorWhite)
 
 		// Dismiss overlay immediately on click touch anywhere
-		RegisterZone(0, 0, 480, 480, GestureTap, func() {
+		if RegisterZone(0, 0, 480, 480, GestureSingleTap) {
 			VarAssign(&UIMode, ModeStandardGrid)
-		})
+		}
 	}
 }

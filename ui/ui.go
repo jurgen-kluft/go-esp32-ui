@@ -13,7 +13,8 @@ import (
 // Your menu layout reads and modifies these directly while running on the Mac.
 
 var (
-	UIMode = vm.Var{Index: 0, Type: vm.VarTypeU8, Value: 0}
+	UIPage = vm.Var{Index: 0, Type: vm.VarTypeU8, Value: 0}
+	UIMode = vm.Var{Index: 1, Type: vm.VarTypeU8, Value: 0}
 
 	DateString = vm.Var{Index: 4, Type: vm.VarTypeStr, Value: ""}
 	TimeString = vm.Var{Index: 5, Type: vm.VarTypeStr, Value: ""}
@@ -70,12 +71,10 @@ var (
 	ModeRainingOverlay = 3
 )
 
-// Gesture Bitmask Filters
+// UI Pages
 const (
-	GestureTap       byte = 0x01
-	GestureHold      byte = 0x02
-	GestureSlide     byte = 0x03
-	GestureDoubleTap byte = 0x04
+	PageOverview         = 0
+	Page1stFloorBathroom = 1
 )
 
 // ============================================================================
@@ -113,24 +112,42 @@ func GetLightColor(lightID vm.Var) uint32 {
 // ============================================================================
 // 3. SIMULATOR ENVIRONMENT ENGINE
 // ============================================================================
+type GestureFlags uint8
 
-type ZoneDef struct {
-	X, Y, W, H uint16
-	Gesture    byte
-	Action     func()
-}
+// Gesture Bitmask Filters
+const (
+	GestureNone       uint8 = 0x00
+	GestureSingleTap  uint8 = 0x01
+	GestureSingleHold uint8 = 0x02
+	GestureSlide      uint8 = 0x03
+	GestureDoubleTap  uint8 = 0x04
+	GestureDoubleHold uint8 = 0x05
+)
 
 type SimulatorEnv struct {
-	ActiveZones      []ZoneDef
 	IsShiftHeld      bool
-	LastGestureFired byte
+	LastGestureFired uint8
 	ClickTimer       float32 // Tracks time between clicks for Double-Tap logic
 	ClickCount       int
+	GestureConsumed  bool
+	HoldTriggered    bool
 }
 
 // Global active instance of our mock simulator environment
 var Env = &SimulatorEnv{
-	ActiveZones: make([]ZoneDef, 0),
+	IsShiftHeld:      false,
+	LastGestureFired: GestureNone,
+	ClickTimer:       0,
+	ClickCount:       0,
+	GestureConsumed:  false,
+	HoldTriggered:    false,
+}
+
+func activeGesturePoint(gesture uint8) (int, int) {
+	if gesture == GestureSlide && Env.IsShiftHeld {
+		return int(Finger1X.AsInt32()), int(Finger1Y.AsInt32())
+	}
+	return int(Finger0X.AsInt32()), int(Finger0Y.AsInt32())
 }
 
 // RGB565 short code color parsing engine utility matching standard 16-bit rules
@@ -286,13 +303,32 @@ func GetTimer(timerName string) bool {
 // 7. Event Zone registration and gesture evaluation
 // ============================================================================
 
-// RegisterZone stores interaction nodes in the active tracking frame queue
-func RegisterZone(x, y, w, h int, gesture byte, action func()) {
-	Env.ActiveZones = append(Env.ActiveZones, ZoneDef{
-		X: uint16(x), Y: uint16(y), W: uint16(w), H: uint16(h),
-		Gesture: gesture,
-		Action:  action,
-	})
+// RegisterZone returns true when the current frame's input hits the requested
+// zone and matches the requested gesture filter.
+func RegisterZone(x, y, w, h int, gestureFilter uint8) bool {
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	if Env.LastGestureFired == GestureNone {
+		return false
+	}
+	if gestureFilter != Env.LastGestureFired {
+		return false
+	}
+	if Env.GestureConsumed && Env.LastGestureFired != GestureSlide {
+		return false
+	}
+
+	targetX, targetY := activeGesturePoint(Env.LastGestureFired)
+	if targetX < x || targetX >= x+w || targetY < y || targetY >= y+h {
+		return false
+	}
+
+	if Env.LastGestureFired != GestureSlide {
+		Env.GestureConsumed = true
+	}
+	return true
+
 }
 
 // ============================================================================
@@ -345,7 +381,7 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 		Env.ClickTimer += deltaTime
 		if Env.ClickTimer > 0.3 { // Reset window after 300ms
 			if Env.ClickCount == 1 {
-				Env.LastGestureFired = GestureTap
+				Env.LastGestureFired = GestureSingleTap
 			}
 			Env.ClickCount = 0
 			Env.ClickTimer = 0
@@ -370,14 +406,13 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 	if imgui.IsWindowHovered() && Finger0State.Value == 1 && !Env.IsShiftHeld {
 		// Basic fallback simulation shortcut: Clicking and holding right-mouse button
 		// can also act as an immediate shortcut for a long-press GestureHold event.
-		if imgui.IsMouseClickedBoolV(imgui.MouseButtonRight, false) || io.MouseDownDuration()[0] > 0.5 {
-			Env.LastGestureFired = GestureHold
+		if !Env.HoldTriggered && (imgui.IsMouseClickedBoolV(imgui.MouseButtonRight, false) || io.MouseDownDuration()[0] > 0.5) {
+			Env.LastGestureFired = GestureSingleHold
+			Env.HoldTriggered = true
 		}
 	}
 
 	// 4. Render Layout & Process Touch Hits
-	// Clear the local boundary registry cache stack
-	Env.ActiveZones = Env.ActiveZones[:0]
 
 	// Execute your layout function (e.g. RenderBathroomPage())
 	renderLayoutBlock()
@@ -405,35 +440,23 @@ func RenderSimulationWindow(renderLayoutBlock func()) {
 }
 
 func evaluateActiveTouchGestures() {
-	if Env.LastGestureFired == 0x00 {
+	if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
+		Env.HoldTriggered = false
+	}
+
+	if Env.LastGestureFired == GestureNone {
+		Env.GestureConsumed = false
 		return
 	}
 
-	// Choose which tracking stream point maps to current check targets
-	targetX := Finger0X.AsInt32()
-	targetY := Finger0Y.AsInt32()
-	if Env.LastGestureFired == GestureSlide && Env.IsShiftHeld {
-		targetX = Finger1X.AsInt32()
-		targetY = Finger1Y.AsInt32()
-	}
-
-	for _, zone := range Env.ActiveZones {
-		if targetX >= int32(zone.X) && targetX <= int32(zone.X+zone.W) &&
-			targetY >= int32(zone.Y) && targetY <= int32(zone.Y+zone.H) {
-			if zone.Gesture == Env.LastGestureFired {
-				zone.Action()
-
-				// Keep slide stream open across frames; consumption resets transient discrete actions
-				if Env.LastGestureFired != GestureSlide {
-					Env.LastGestureFired = 0x00
-				}
-				return
-			}
+	if Env.LastGestureFired == GestureSlide {
+		if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
+			Env.LastGestureFired = GestureNone
+			Env.GestureConsumed = false
 		}
+		return
 	}
 
-	// Reset if click drops down outside zones completely
-	if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
-		Env.LastGestureFired = 0x00
-	}
+	Env.LastGestureFired = GestureNone
+	Env.GestureConsumed = false
 }
