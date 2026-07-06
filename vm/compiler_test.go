@@ -157,7 +157,7 @@ func TestUnsupportedBinaryOperatorFailsCompilation(t *testing.T) {
 		t.Fatalf("expected division to compile: %v", err)
 	}
 
-	want := []byte{byte(OpPushVar), 0x00, 0x00, 0x00, 0x01, byte(OpPushVar), 0x01, 0x00, 0x00, 0x01, byte(OpBinaryOp), byte(OpDiv), byte(OpReturn), 1}
+	want := []byte{byte(OpPushVar), 0x00, 0x00, 0x00, 0x01, byte(OpPushVar), 0x01, 0x00, 0x00, 0x01, byte(OpDiv), byte(OpReturn), 1}
 	if len(block.Bytes) != len(want) {
 		t.Fatalf("unexpected bytecode length: got %d want %d (%v)", len(block.Bytes), len(want), block.Bytes)
 	}
@@ -225,7 +225,7 @@ func TestCompilerRegistersDesignSyscalls(t *testing.T) {
 	}
 
 	for name, id := range want {
-		got, ok := systemInterface.RegisterSystemCall(name)
+		got, ok := systemInterface[name]
 		if !ok {
 			t.Fatalf("missing syscall registration for %s", name)
 		}

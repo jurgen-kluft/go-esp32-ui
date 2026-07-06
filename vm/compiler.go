@@ -31,7 +31,7 @@ type Compiler struct {
 	nextBlockID     uint32
 	explicitGlobals map[string]VarRef
 
-	systemInterface  CompilerSystemInterface
+	systemCalls      map[string]uint8
 	declaredGlobals  map[string]Var
 	numericConstants map[string]Var
 	stringConstants  map[string]Var
@@ -42,12 +42,12 @@ type Compiler struct {
 	nextLocalIdx uint32
 }
 
-func NewCompiler(globals map[string]VarRef, systemInterface CompilerSystemInterface) *Compiler {
+func NewCompiler(globals map[string]VarRef, systemInterface map[string]uint8) *Compiler {
 	c := &Compiler{
 		blocks:           make(map[uint32]*Block),
 		nextBlockID:      0,
 		explicitGlobals:  globals,
-		systemInterface:  systemInterface,
+		systemCalls:      systemInterface,
 		declaredGlobals:  make(map[string]Var),
 		numericConstants: make(map[string]Var),
 		stringConstants:  make(map[string]Var),
@@ -84,11 +84,6 @@ func (c *Compiler) lookupGlobalRef(name string) (VarRef, bool) {
 	}
 	ref, ok := c.explicitGlobals[name]
 	return ref, ok
-}
-
-func (c *Compiler) lookupDeclaredGlobal(name string) (Var, bool) {
-	variable, ok := c.declaredGlobals[name]
-	return variable, ok
 }
 
 func (c *Compiler) internStringConstant(literal string) VarRef {
@@ -141,7 +136,7 @@ func unwrapCallName(expr ast.Expr) (string, bool) {
 	}
 }
 
-func (c *Compiler) compileBinaryIntrinsic(args []ast.Expr, opType BinaryOpType) ([]byte, error) {
+func (c *Compiler) compileBinaryIntrinsic(args []ast.Expr, op Opcode) ([]byte, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("intrinsic expects 2 arguments")
 	}
@@ -158,8 +153,7 @@ func (c *Compiler) compileBinaryIntrinsic(args []ast.Expr, opType BinaryOpType) 
 	var buf bytes.Buffer
 	buf.Write(left)
 	buf.Write(right)
-	buf.WriteByte(byte(OpBinaryOp))
-	buf.WriteByte(byte(opType))
+	buf.WriteByte(byte(op))
 	return buf.Bytes(), nil
 }
 
@@ -178,7 +172,6 @@ func (c *Compiler) compileNumericCast(targetType VarType, args []ast.Expr) ([]by
 	if err := writePushVarRef(&buf, c.internNumericConstant(targetType, 0)); err != nil {
 		return nil, err
 	}
-	buf.WriteByte(byte(OpBinaryOp))
 	buf.WriteByte(byte(OpAdd))
 	return buf.Bytes(), nil
 }
@@ -226,38 +219,31 @@ func (c *Compiler) compileAssignIntrinsic(args []ast.Expr) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (c *Compiler) compileIntrinsicCall(name string, args []ast.Expr) ([]byte, bool, error) {
+func (c *Compiler) compileIntrinsicCall(name string, args []ast.Expr) (bytes []byte, ok bool, err error) {
+	ok = true
 	switch name {
 	case "VarToUint32", "uint32":
-		bytes, err := c.compileNumericCast(VarTypeU32, args)
-		return bytes, true, err
+		bytes, err = c.compileNumericCast(VarTypeU32, args)
 	case "VarToInt32", "int32":
-		bytes, err := c.compileNumericCast(VarTypeS32, args)
-		return bytes, true, err
+		bytes, err = c.compileNumericCast(VarTypeS32, args)
 	case "VarToFloat32", "float32":
-		bytes, err := c.compileNumericCast(VarTypeF32, args)
-		return bytes, true, err
+		bytes, err = c.compileNumericCast(VarTypeF32, args)
 	case "VarAssign":
-		bytes, err := c.compileAssignIntrinsic(args)
-		return bytes, true, err
+		bytes, err = c.compileAssignIntrinsic(args)
 	case "VarEq":
-		bytes, err := c.compileBinaryIntrinsic(args, OpEQ)
-		return bytes, true, err
+		bytes, err = c.compileBinaryIntrinsic(args, OpEQ)
 	case "VarLt":
-		bytes, err := c.compileBinaryIntrinsic(args, OpL)
-		return bytes, true, err
+		bytes, err = c.compileBinaryIntrinsic(args, OpL)
 	case "VarLe":
-		bytes, err := c.compileBinaryIntrinsic(args, OpLE)
-		return bytes, true, err
+		bytes, err = c.compileBinaryIntrinsic(args, OpLE)
 	case "VarGt":
-		bytes, err := c.compileBinaryIntrinsic(args, OpG)
-		return bytes, true, err
+		bytes, err = c.compileBinaryIntrinsic(args, OpG)
 	case "VarGe":
-		bytes, err := c.compileBinaryIntrinsic(args, OpGE)
-		return bytes, true, err
+		bytes, err = c.compileBinaryIntrinsic(args, OpGE)
 	default:
-		return nil, false, nil
+		ok = false
 	}
+	return bytes, ok, err
 }
 
 func writePushVarRef(buf *bytes.Buffer, ref VarRef) error {
@@ -541,7 +527,6 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 				return nil, err
 			}
 			buf.Write(operandBytes)
-			buf.WriteByte(byte(OpBinaryOp))
 			buf.WriteByte(byte(OpSub))
 			return buf.Bytes(), nil
 		default:
@@ -581,29 +566,12 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 		}
 		buf.Write(left)
 		buf.Write(right)
-		buf.WriteByte(byte(OpBinaryOp))
-		switch e.Op {
-		case token.ADD:
-			buf.WriteByte(byte(OpAdd))
-		case token.SUB:
-			buf.WriteByte(byte(OpSub))
-		case token.MUL:
-			buf.WriteByte(byte(OpMul))
-		case token.QUO:
-			buf.WriteByte(byte(OpDiv))
-		case token.EQL:
-			buf.WriteByte(byte(OpEQ))
-		case token.GTR:
-			buf.WriteByte(byte(OpG))
-		case token.GEQ:
-			buf.WriteByte(byte(OpGE))
-		case token.LSS:
-			buf.WriteByte(byte(OpL))
-		case token.LEQ:
-			buf.WriteByte(byte(OpLE))
-		default:
+
+		opcode, ok := tokenToOpcode(e.Op)
+		if !ok {
 			return nil, fmt.Errorf("unsupported binary operator: %s", e.Op)
 		}
+		buf.WriteByte(byte(opcode))
 
 	case *ast.CallExpr:
 		name, ok := unwrapCallName(e.Fun)
@@ -618,7 +586,7 @@ func (c *Compiler) compileExpression(expr ast.Expr) ([]byte, error) {
 			return intrinsicBytes, nil
 		}
 
-		sysID, ok := c.systemInterface.RegisterSystemCall(name)
+		sysID, ok := c.systemCalls[name]
 		if !ok {
 			return nil, fmt.Errorf("unknown syscall: %s", name)
 		}

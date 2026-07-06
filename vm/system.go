@@ -36,39 +36,24 @@ type VmSystemInterface interface {
 	GetLightColor(lightID uint32) uint32
 }
 
-type CompilerSystemInterface interface {
-	RegisterSystemCall(name string) (uint8, bool)
-}
+func NewCompilerSystemCalls() map[string]uint8 {
+	systemCallMap := make(map[string]uint8)
 
-type CompilerSystemCalls struct {
-	systemCallMap map[string]uint8
-}
+	systemCallMap["DrawBackground"] = uint8(SystemCallDrawBackground)
+	systemCallMap["DrawSprite"] = uint8(SystemCallDrawSprite)
+	systemCallMap["DrawText"] = uint8(SystemCallDrawText)
+	systemCallMap["DrawVar"] = uint8(SystemCallDrawVar)
 
-func NewCompilerSystemCalls() CompilerSystemInterface {
-	csc := &CompilerSystemCalls{
-		systemCallMap: make(map[string]uint8),
-	}
+	systemCallMap["StartTimer"] = uint8(SystemCallStartTimer)
+	systemCallMap["StopTimer"] = uint8(SystemCallStopTimer)
+	systemCallMap["IsTimerDone"] = uint8(SystemCallIsTimerDone)
 
-	csc.systemCallMap["DrawBackground"] = uint8(SystemCallDrawBackground)
-	csc.systemCallMap["DrawSprite"] = uint8(SystemCallDrawSprite)
-	csc.systemCallMap["DrawText"] = uint8(SystemCallDrawText)
-	csc.systemCallMap["DrawVar"] = uint8(SystemCallDrawVar)
+	systemCallMap["SetLightOnOff"] = uint8(SystemCallSetLightOnOff)
+	systemCallMap["IsLightOn"] = uint8(SystemCallIsLightOn)
+	systemCallMap["SetLightBrightness"] = uint8(SystemCallSetLightBrightness)
+	systemCallMap["GetLightBrightness"] = uint8(SystemCallGetLightBrightness)
+	systemCallMap["SetLightColor"] = uint8(SystemCallSetLightColor)
+	systemCallMap["GetLightColor"] = uint8(SystemCallGetLightColor)
 
-	csc.systemCallMap["StartTimer"] = uint8(SystemCallStartTimer)
-	csc.systemCallMap["StopTimer"] = uint8(SystemCallStopTimer)
-	csc.systemCallMap["IsTimerDone"] = uint8(SystemCallIsTimerDone)
-
-	csc.systemCallMap["SetLightOnOff"] = uint8(SystemCallSetLightOnOff)
-	csc.systemCallMap["IsLightOn"] = uint8(SystemCallIsLightOn)
-	csc.systemCallMap["SetLightBrightness"] = uint8(SystemCallSetLightBrightness)
-	csc.systemCallMap["GetLightBrightness"] = uint8(SystemCallGetLightBrightness)
-	csc.systemCallMap["SetLightColor"] = uint8(SystemCallSetLightColor)
-	csc.systemCallMap["GetLightColor"] = uint8(SystemCallGetLightColor)
-
-	return csc
-}
-
-func (csc *CompilerSystemCalls) RegisterSystemCall(name string) (uint8, bool) {
-	id, ok := csc.systemCallMap[name]
-	return id, ok
+	return systemCallMap
 }

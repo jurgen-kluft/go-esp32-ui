@@ -305,10 +305,10 @@ func (vm *VM) comparisonResult(ok bool) *Var {
 	return vm.allocTempVar(VarTypeBool, VarFlagNone, false)
 }
 
-func (vm *VM) applyBinaryOp(opType BinaryOpType, left, right *Var) *Var {
+func (vm *VM) applyBinaryOp(op Opcode, left, right *Var) *Var {
 	resultType := vm.binaryResultType(left, right)
 
-	switch opType {
+	switch op {
 	case OpAdd:
 		switch resultType {
 		case VarTypeF32:
@@ -540,10 +540,7 @@ func (vm *VM) executeCurrentFrame() {
 			localVar.Flags = val.Flags
 			localVar.Value = val.Value
 
-		case OpBinaryOp:
-			opType := BinaryOpType(block.Bytes[vm.CurrentFrame.PC])
-			vm.CurrentFrame.PC++
-
+		case OpAdd, OpSub, OpMul, OpDiv, OpEQ, OpG, OpGE, OpL, OpLE:
 			rightRef := vm.popStackRef()
 			right, ok := vm.resolveStackRef(block, rightRef)
 			if !ok {
@@ -556,7 +553,7 @@ func (vm *VM) executeCurrentFrame() {
 				vm.runtimeErrorf("failed to resolve left stack ref %+v", leftRef)
 				return
 			}
-			result := vm.applyBinaryOp(opType, left, right)
+			result := vm.applyBinaryOp(op, left, right)
 			vm.pushTempVar(result)
 
 		case OpIf:

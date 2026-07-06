@@ -290,15 +290,7 @@ func validateBlockBytecode(block ProgramImageBlockRecord, bytes []byte, blockIDs
 				return err
 			}
 			pc += 4
-		case OpBinaryOp:
-			if pc+1 > uint32(len(bytes)) {
-				return fmt.Errorf("block %d truncated OpBinaryOp", block.BlockID)
-			}
-			opType := BinaryOpType(bytes[pc])
-			if opType > OpLE {
-				return fmt.Errorf("block %d uses unknown binary op %d", block.BlockID, opType)
-			}
-			pc++
+		case OpAdd, OpSub, OpMul, OpDiv, OpEQ, OpG, OpGE, OpL, OpLE:
 		case OpIf:
 			if pc+12 > uint32(len(bytes)) {
 				return fmt.Errorf("block %d truncated OpIf", block.BlockID)
