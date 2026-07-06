@@ -334,3 +334,26 @@ func TestIfBlocksUseSubScopeMetadata(t *testing.T) {
 		t.Fatalf("false block should keep inherited local count: %+v", compiler.blocks[falseBlockID])
 	}
 }
+
+func TestIfTrueBlockWithoutBranchLocalsKeepsInheritedLocalCount(t *testing.T) {
+	compiler, root := compileProgramForTest(t, nil, "x := 1\nif 1 == 1 {\n\tx = x + 1\n}\nreturn x")
+
+	if len(root.Bytes) < 19 || root.Bytes[10] != byte(OpIf) {
+		t.Fatalf("root block does not contain expected OpIf bytecode: %v", root.Bytes)
+	}
+
+	trueBlockID := binary.LittleEndian.Uint32(root.Bytes[15:19])
+	trueBlock := compiler.blocks[trueBlockID]
+	if trueBlock == nil {
+		t.Fatalf("missing true block %d", trueBlockID)
+	}
+	if trueBlock.InheritedLocals != 1 {
+		t.Fatalf("true block should inherit one local slot: %+v", trueBlock)
+	}
+	if trueBlock.LocalCount != 1 {
+		t.Fatalf("true block should preserve inherited local count when no branch locals are declared: %+v", trueBlock)
+	}
+	if _, err := compiler.WriteProgramImage(root.ID); err != nil {
+		t.Fatalf("WriteProgramImage failed for inherited-only true block: %v", err)
+	}
+}

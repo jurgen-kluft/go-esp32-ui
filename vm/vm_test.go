@@ -518,6 +518,76 @@ func TestCompileAndExecuteLightStateSyscalls(t *testing.T) {
 	requireStackUint32(t, vm, 0, 123534)
 }
 
+func TestCompileAndExecuteComplexLightingProgram(t *testing.T) {
+	globals := map[string]VarRef{
+		"Finger1X":   GlobalRef(0),
+		"UIMode":     GlobalRef(1),
+		"LightLevel": GlobalRef(2),
+		"StatusVar":  GlobalRef(3),
+	}
+
+	compiler, root := compileProgramForTest(t, globals, strings.Join([]string{
+		"level := uint32((VarToInt32(Finger1X)-10)*2)",
+		"VarAssign(&LightLevel, level)",
+		"if VarGt(level, 40) {",
+		"\tSetLightOnOff(1, 1)",
+		"\tSetLightBrightness(1, level)",
+		"\tSetLightColor(1, 123456)",
+		"\tDrawText(11, \"bright\", 13, level, 15)",
+		"\tVarAssign(&UIMode, 2)",
+		"\tstatus := GetLightBrightness(1)",
+		"\tVarAssign(&StatusVar, status)",
+		"}",
+		"return level, UIMode, LightLevel",
+	}, "\n"))
+
+	sys := NewTestSystemInterface()
+	globalState := []Var{
+		{Index: 0, Type: VarTypeU16, Value: uint16(35)},
+		{Index: 1, Type: VarTypeU8, Value: uint8(0)},
+		{Index: 2, Type: VarTypeU32, Value: uint32(0)},
+		{Index: 3, Type: VarTypeU32, Value: uint32(0)},
+	}
+	vm := NewVirtualMachine(sys, globalState)
+	loadProgramIntoVM(vm, compiler)
+	vm.ExecuteBlock(root.ID)
+
+	if vm.StackLen() != 3 {
+		t.Fatalf("unexpected stack after execution: %s", vm.DumpRefStack())
+	}
+	requireStackUint32(t, vm, 0, 50)
+	requireStackUint32(t, vm, 1, 2)
+	requireStackUint32(t, vm, 2, 50)
+
+	if got := globalState[1].Uint32Value(); got != 2 {
+		t.Fatalf("unexpected UIMode: got %d want 2", got)
+	}
+	if got := globalState[2].Uint32Value(); got != 50 {
+		t.Fatalf("unexpected LightLevel: got %d want 50", got)
+	}
+	if got := globalState[3].Uint32Value(); got != 50 {
+		t.Fatalf("unexpected StatusVar: got %d want 50", got)
+	}
+	if got := sys.LightsOn[1]; got != 1 {
+		t.Fatalf("unexpected light state: got %d want 1", got)
+	}
+	if got := sys.LightBrightness[1]; got != 50 {
+		t.Fatalf("unexpected brightness: got %d want 50", got)
+	}
+	if got := sys.LightColor[1]; got != 123456 {
+		t.Fatalf("unexpected color: got %d want 123456", got)
+	}
+	if len(sys.DrawLog) != 1 {
+		t.Fatalf("unexpected draw log length: got %d want 1", len(sys.DrawLog))
+	}
+	if got := sys.DrawLog[0]; got != "DrawText(Font: 11, Text: \"bright\", X: 13, Y: 50, Color: 15)" {
+		t.Fatalf("unexpected draw log entry: %q", got)
+	}
+	if vm.localTop != 0 {
+		t.Fatalf("expected locals to be released after execution, localTop=%d", vm.localTop)
+	}
+}
+
 func TestSyscallArgumentsUseNumericConversion(t *testing.T) {
 	compiler, root := compileProgramForTest(t, nil, "DrawBackground(1.75)")
 

@@ -322,6 +322,9 @@ func (c *Compiler) CompileBlock(block *Block, stmts []ast.Stmt) error {
 	}
 	parentLocalIdx := c.nextLocalIdx
 	block.InheritedLocals = parentLocalIdx
+	if block.LocalCount < block.InheritedLocals {
+		block.LocalCount = block.InheritedLocals
+	}
 
 	for _, stmt := range stmts {
 		switch s := stmt.(type) {
