@@ -32,6 +32,7 @@ type VmSystemInterface interface {
 	IsTimerDone(timerID uint32) bool
 
 	SetLightOnOff(lightID, onOff uint32)
+	SetLightToggle(lightID uint32)
 	IsLightOn(lightID uint32) bool
 	SetLightBrightness(lightID, brightness uint32)
 	GetLightBrightness(lightID uint32) uint32

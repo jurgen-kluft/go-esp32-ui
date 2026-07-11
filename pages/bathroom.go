@@ -27,6 +27,11 @@ func Page1stFloorBathroomFn() {
 		// Small time on the right top corner of the grid
 		DrawVar(FontSmall, TimeString, 400, 60, ColorWhite)
 
+		// Single-Tap: Instantly toggles the light status variable locally on the ESP32
+		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleTap) {
+			SetLightToggle(GroundfloorBathroomCeilingLight_State)
+		}
+
 		// Grid Column 0, Row 0: Main Ceiling Light Button Container
 		if IsLightOn(GroundfloorBathroomCeilingLight_State) {
 			DrawSprite(startX, startY, BtnGoldOn120x120)
@@ -36,21 +41,11 @@ func Page1stFloorBathroomFn() {
 			DrawText(FontSmall, "Ceiling (OFF)", startX+15, startY+80, ColorWhite)
 		}
 
-		// Single-Tap: Instantly toggles the light status variable locally on the ESP32
-		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleTap) {
-			if IsLightOn(GroundfloorBathroomCeilingLight_State) {
-				SetLightOnOff(GroundfloorBathroomCeilingLight_State, 0)
-			} else {
-				SetLightOnOff(GroundfloorBathroomCeilingLight_State, 1)
-			}
-		}
-
-		// Press & Hold: Hides the main grid and enters the advanced multi-touch dimmer overlay
-		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleHold|GestureFinger0) {
-			VarAssign(&UIMode, ModeDimmerOverlay)
-		}
-
 		// Grid Column 1, Row 0: Mirror Light Button Container
+		if RegisterZone(startX+spacing, startY, btnSize, btnSize, GestureSingleTap) {
+			SetLightToggle(GroundfloorBathroomMirrorLight_State)
+		}
+
 		if IsLightOn(GroundfloorBathroomMirrorLight_State) {
 			DrawSprite(startX+spacing, startY, BtnGoldOn120x120)
 			DrawText(FontSmall, "Mirror (ON)", startX+spacing+20, startY+80, ColorWhite)
@@ -59,12 +54,9 @@ func Page1stFloorBathroomFn() {
 			DrawText(FontSmall, "Mirror (OFF)", startX+spacing+20, startY+80, ColorWhite)
 		}
 
-		if RegisterZone(startX+spacing, startY, btnSize, btnSize, GestureSingleTap) {
-			if IsLightOn(GroundfloorBathroomMirrorLight_State) {
-				SetLightOnOff(GroundfloorBathroomMirrorLight_State, 0)
-			} else {
-				SetLightOnOff(GroundfloorBathroomMirrorLight_State, 1)
-			}
+		// Press & Hold: Hides the main grid and enters the advanced multi-touch dimmer overlay
+		if RegisterZone(startX, startY, btnSize, btnSize, GestureSingleHold|GestureFinger0) {
+			VarAssign(&UIMode, ModeDimmerOverlay)
 		}
 
 		// --- DOUBLE TAP SCREEN ESCAPE ACCELERATOR ---

@@ -87,11 +87,12 @@ const (
 // ============================================================================
 
 func DrawBackground(imageID vm.Var) {
-
 }
 
 func SetLightOnOff(lightID vm.Var, onOff uint32) {
+}
 
+func SetLightToggle(lightID vm.Var) {
 }
 
 func IsLightOn(lightID vm.Var) bool {
@@ -99,7 +100,6 @@ func IsLightOn(lightID vm.Var) bool {
 }
 
 func SetLightBrightness(lightID vm.Var, brightness uint32) {
-
 }
 
 func GetLightBrightness(lightID vm.Var) uint32 {
