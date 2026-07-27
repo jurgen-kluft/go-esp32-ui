@@ -1,8 +1,8 @@
 # UI
 
-We develop the UI in Golang using constrained functionality of Go and only a given set of external functions like DrawText, DrawSprite, DrawVar, StartTimer, etc.
+We develop the UI in Cova, a scripting language, using a given set of external host functions like DrawText, DrawSprite, DrawVar, StartTimer, etc.
 
-The UI code should mainly use logic and control flow, but to get a better grip of what is not supported, the following list of unsupported Golang functionality should give a good overview of what is not supported:
+The UI code mainly is logic and control flow, but to get a better grip of what is not supported, the following list of unsupported Golang functionality should give a good overview of what is not supported:
 
 * no arrays, no slices, no maps, no structs, no pointers
 * no allocation of memory (no new, no make, no append)
@@ -13,61 +13,45 @@ The UI code should mainly use logic and control flow, but to get a better grip o
 * no closures, no anonymous functions
 * no package imports, no external packages
 
-The UI code can be compiled to a bytecode format that is interpreted by a custom virtual-machine running on the ESP32. The virtual machine is implemented in C like C++.
+The UI code can be compiled to a bytecode format that is interpreted by a custom virtual-machine running on the ESP32. The virtual machine is implemented in C-like-C++.
 
-This means that the UI code is a VM binary and we can update the UI without having to recompile the entire firmware. The UI can be updated over-the-air (OTA) or on an SD card.
+This means that the UI code is a VM binary and we can update the UI without having to recompile the entire firmware. The UI can be updated over-the-air (OTA) or through an SD card.
 
 ## State
 
-The full state consists of predefined variables where each variable has an ID.
-Through this we can update the state externally and the UI will automatically reflect the new state.
+The full state consists of a C struct with members where each member has an byte offset. We can update this state externally and the UI will automatically reflect/use the new state.
 
 ## ID
 
 An ID is a 32-bit integer that is used to identify a variable or asset in the UI code. The ID should stay stable, that is why they need to be predefined, so even if variables or assets are added or removed, the UI code can be updated without having to recompile the entire firmware.
 
-[Type:8, Index:24] = 32 bits
-
-Types:
-
-* TypeVariableU8        = 1
-* TypeVariableU16       = 2
-* TypeVariableU32       = 3
-* TypeVariableS8        = 4
-* TypeVariableS16       = 5
-* TypeVariableS32       = 6
-* TypeVariableF32       = 7
-* TypeAssetColorPalette = 128
-* TypeAssetImage        = 129
-* TypeAssetFont         = 130
-
 ## Global Variable Examples
 
 Global variables are predefined and can be used in the UI code. Each variable has a type and an index. The type is used to determine how to interpret the variable's value, and the index is used to identify the variable in the state.
 
-e.g. 
-"GroundFloor.Bathroom.CeilingLight.OnOff"            = TypeVariableU8, Index = 0
-"GroundFloor.Bathroom.CeilingLight.Brightness"       = TypeVariableU8, Index = 1
-"GroundFloor.Bathroom.CeilingLight.Color"            = TypeVariableU32, Index = 0
+```C++
+struct State {
+    uint32_t light1OnOff;        // Type = TypeVarBool, Index = 0
+    uint32_t light1Brightness;   // Type = TypeVarUint8, Index = 1
+    uint32_t light1Color;        // Type = TypeVarColor, Index = 2
+    uint32_t light2OnOff;        // Type = TypeVarBool, Index = 3
+    uint32_t light2Brightness;   // Type = TypeVarUint8, Index = 4
+    uint32_t light2Color;        // Type = TypeVarColor, Index = 5
+};
 
-"Sensor.Inside.Temp"                                 = TypeVariableF32, Index = 1
-"Sensor.Inside.Humidity"                             = TypeVariableF32, Index = 2
+// In Cova you will have to do this:
+extern(0) light1OnOff;       // Type = TypeVarBool, Index = 0
+extern(4) light1Brightness;  // Type = TypeVarUint8, Index = 1
+extern(8) light1Color;       // Type = TypeVarColor, Index = 2
+extern(12) light2OnOff;      // Type = TypeVarBool, Index = 3
+extern(16) light2Brightness; // Type = TypeVarUint8, Index = 4
+extern(20) light2Color;      // Type = TypeVarColor, Index
 
-"Sensor.Weather.Temp"                                = TypeVariableF32, Index = 3
-"Sensor.Weather.Humidity"                            = TypeVariableF32, Index = 4
-"Sensor.Weather.Rain"                                = TypeVariableF32, Index = 5
-
-"System.Year"                                        = TypeVariableU16, Index = 0
-"System.Month"                                       = TypeVariableU8, Index = 2
-"System.Day"                                         = TypeVariableU8, Index = 3
-"System.WeekDay"                                     = TypeVariableU8, Index = 4
-"System.Hour"                                        = TypeVariableU8, Index = 5
-"System.Minute"                                      = TypeVariableU8, Index = 6
-"System.Second"                                      = TypeVariableU8, Index = 7
+```
 
 ## Local Variables
 
-The UI code can define local variables that are only visible within the block they are defined in. Local variables are stored on the stack and are automatically cleaned up when the block is exited. Local variables can be used to store temporary values that are only needed within the block.
+The UI code can define local variables that are only visible within the scope they are defined in. Local variables are stored on the stack and are automatically cleaned up when the scope is exited. Local variables can be used to store temporary values that are only needed within the scope.
 
 Just like the global variables, local variables have a type and an index. The type is used to determine how to interpret the variable's value, and the index is used to identify the variable in the stack frame.
 
