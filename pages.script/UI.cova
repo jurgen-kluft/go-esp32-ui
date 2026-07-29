@@ -1,0 +1,256 @@
+#define extern(x)
+
+// External functions (function Ids)
+extern(0) void ClearScreen(u32 color);
+extern(1) void DrawSprite(u16 x, u16 y, u16 spriteId);
+extern(2) void DrawText(u8 fontId, const u8* text, u16 x, u16 y, u32 color);
+extern(3) void DrawDate(u8 fontId, u16 x, u16 y, u32 color);
+extern(4) void DrawTime(u8 fontId, u16 x, u16 y, u32 color);
+extern(5) void DrawValue(u8 fontId, i32 value, u8 unit, u16 x, u16 y, u32 color);
+
+extern(6) bool IsLightOn(u16 lightId);
+extern(7) void SetLightOnOff(u16 lightId, int8 onOff);
+extern(8) void ToggleLightOnOff(u16 lightId);
+extern(9) void SetLightBrightness(u16 lightId, u16 brightnessValue);
+extern(10) u16 GetLightBrightness(u16 lightId);
+
+extern(11) bool RegisterZone(int16 x, int16 y, int16 width, int16 height, int8 gestureType);
+
+extern(12) void StartTimer(u16 timerId);
+extern(13) void StopTimer(u16 timerId);
+extern(14) bool IsTimerDone(u16 timerId);
+
+extern(15) i32 GetInsideHumidity();
+extern(16) i32 GetInsideTemperature();
+extern(17) i32 GetInsidePressure();
+extern(18) i32 GetOutsideHumidity();
+extern(19) i32 GetOutsideTemperature();
+extern(20) i32 GetOutsidePressure();
+extern(21) u32 GetWeatherState();
+
+// External variables (byte offsets in a memory block)
+extern(0) int16 Finger0X;
+extern(2) int16 Finger1X;
+extern(4) int16 Finger0State;
+extern(6) int16 Finger1State;
+
+// Units
+const u8 UnitCelsius = 0;
+const u8 UnitFahrenheit = 1;
+const u8 UnitHPA = 2;
+const u8 UnitPercent = 3;
+
+// Timer identifiers
+const u16 RainingOverlayTimerId = 300;
+
+// Light identifiers
+const u16 GroundfloorBathroomCeilingLightId = 100;
+const u16 GroundfloorBathroomMirrorLightId = 101;
+
+// Gesture identifiers
+const u8 GestureSingleTap = 1;
+const u8 GestureSingleHold = 2;
+const u8 GestureDoubleTap = 3;
+const u8 GestureSlide = 4;
+const u8 GestureFinger0 = 5;
+const u8 GestureFinger1 = 6;
+
+// Sprite Assets
+const u16 BgCharcoalTopBannerId = 200;
+const u16 BtnGoldOn120x120 = 201;
+const u16 BtnGreyOff120x120 = 202;
+const u16 OverlayDimBackdrop = 203;
+const u16 OverlaySliderCard360x280 = 204;
+const u16 OverlayRainFullscreen = 205;
+
+// Font Asset Identifiers
+const u8 FontMain = 0;
+const u8 FontSmall = 1;
+
+// UI Modes
+const u8 ModeStandardGrid = 0;
+const u8 ModeDimmerOverlay = 1;
+const u8 ModeRainingOverlay = 2;
+const u8 ModeFloorOverview = 3;
+
+// RGB8888 (32 bit) colors
+const u32 ColorWhite = 0xFFFFFFFF;
+const u32 ColorBlack = 0x000000FF;
+const u32 ColorCharcoal = 0x1C1C1CFF;
+const u32 ColorGold = 0xFFD700FF;
+const u32 ColorGrey = 0xC618C6FF;
+const u32 ColorLightGrey = 0xD69AD6FF;
+const u32 ColorRed = 0xFF0000FF;
+const u32 ColorGreen = 0x00FF00FF;
+const u32 ColorBlue = 0x0000FFFF;
+const u32 ColorYellow = 0xFFFF00FF;
+const u32 ColorCyan = 0x00FFFFFF;
+const u32 ColorMagenta = 0xFF00FFFF;
+const u32 ColorDarkGrey = 0x7BEF7BFF;
+
+// Page Identifiers
+const u8 PageOverviewId = 0;
+const u8 Page1stFloorBathroomId = 1;
+
+// Global UI State Variables
+u8 UIMode = 0;
+u8 UIPage = 0;
+
+void script_main() {
+	// STATE ROUTING LAYER: General Event Notification Screen Overlay
+	if (UIMode ==  ModeRainingOverlay) {
+		// Full screen override for urgent sensor alerts (Suddenly-Raining, Washing-Finished)
+		DrawSprite(0, 0, OverlayRainFullscreen);
+		DrawText(FontMain, "Suddenly Raining!", 120, 200, ColorWhite);
+		DrawText(FontSmall, "Tap anywhere to close", 80, 260, ColorWhite);
+
+		// Dismiss overlay immediately on click touch anywhere
+		if (RegisterZone(0, 0, 480, 480, GestureSingleTap)) {
+			UIMode = ModeStandardGrid;
+		}
+
+		// Check if the RainingOverlayTimer has completed its countdown
+		if (IsTimerDone(RainingOverlayTimerId)) {
+			UIMode= ModeStandardGrid;
+		}
+	} else {
+        if (UIPage == PageOverviewId) {
+            PageOverviewFn();
+        } else if (UIPage == Page1stFloorBathroomId) {
+            Page1stFloorBathroomFn();
+        } else {
+            // Handle unknown page ID or default behavior
+        }
+    }
+}
+
+// 888888b.            888    888                                                   d888   8888888888
+// 888  "88b           888    888                                                  d8888   888
+// 888  .88P           888    888                                                    888   888
+// 8888888K.   8888b.  888888 88888b.  888d888 .d88b.   .d88b.  88888b.d88b.         888   8888888
+// 888  "Y88b     "88b 888    888 "88b 888P"  d88""88b d88""88b 888 "888 "88b        888   888
+// 888    888 .d888888 888    888  888 888    888  888 888  888 888  888  888        888   888
+// 888   d88P 888  888 Y88b.  888  888 888    Y88..88P Y88..88P 888  888  888        888   888
+// 8888888P"  "Y888888  "Y888 888  888 888     "Y88P"   "Y88P"  888  888  888      8888888 888
+void Page1stFloorBathroomFn() {
+	// 1. Establish a clean frame baseline by flooding the 480x480 canvas via hardware
+	ClearScreen(ColorCharcoal);
+
+	// 2. Global Top Border & Navigation Banner
+	DrawSprite(0, 0, BgCharcoalTopBannerId);
+	DrawText(FontMain, "1st Floor - Bathroom", 20, 15, ColorWhite);
+
+	// 3. STATE ROUTING LAYER A: Standard Operational Grid View
+	if (UIMode == ModeStandardGrid) {
+
+		// Define UI Grid positioning constraints
+		const u16 startX = 40;
+		const u16 startY = 100;
+		const u16 btnSize = 120;
+		const u16 spacing = 140;
+
+		// Small date on the left top corner of the grid
+		DrawDate(FontSmall, 20, 60, ColorWhite);
+		// Small time on the right top corner of the grid
+		DrawTime(FontSmall, 400, 60, ColorWhite);
+
+		// Grid Column 0, Row 0: Main Ceiling Light Button Container
+		if (IsLightOn(GroundfloorBathroomCeilingLightId)) {
+			DrawSprite(startX, startY, BtnGoldOn120x120);
+			DrawText(FontSmall, "Ceiling (ON)", startX+15, startY+80, ColorWhite);
+		} else {
+			DrawSprite(startX, startY, BtnGreyOff120x120);
+			DrawText(FontSmall, "Ceiling (OFF)", startX+15, startY+80, ColorWhite);
+		}
+
+		// Single-Tap: Instantly toggles the light status variable locally on the ESP32
+		if (RegisterZone(startX, startY, btnSize, btnSize, GestureSingleTap)) {
+            ToggleLightOnOff(GroundfloorBathroomCeilingLightId);
+		}
+
+		// Press & Hold: Hides the main grid and enters the advanced multi-touch dimmer overlay
+		if (RegisterZone(startX, startY, btnSize, btnSize, GestureSingleHold|GestureFinger0)) {
+			UIMode = ModeDimmerOverlay;
+		}
+
+		// Grid Column 1, Row 0: Mirror Light Button Container
+		if (IsLightOn(GroundfloorBathroomMirrorLightId)) {
+			DrawSprite(startX+spacing, startY, BtnGoldOn120x120);
+			DrawText(FontSmall, "Mirror (ON)", startX+spacing+20, startY+80, ColorWhite);
+		} else {
+			DrawSprite(startX+spacing, startY, BtnGreyOff120x120);
+			DrawText(FontSmall, "Mirror (OFF)", startX+spacing+20, startY+80, ColorWhite);
+		}
+
+		if (RegisterZone(startX+spacing, startY, btnSize, btnSize, GestureSingleTap)) {
+			ToggleLightOnOff(GroundfloorBathroomMirrorLightId);
+		}
+
+		// --- DOUBLE TAP SCREEN ESCAPE ACCELERATOR ---
+		// A double-tap anywhere on the main body bounds returns the user to the Floor Overview layout
+		if (RegisterZone(0, 50, 480, 430, GestureDoubleTap)) {
+			UIMode = ModeFloorOverview;
+		}
+	}
+
+	// 4. STATE ROUTING LAYER B: Advanced Multi-Touch Dimmer Overlay View
+	if (UIMode == ModeDimmerOverlay) {
+		// Blit a pre-rendered translucent black mask to fade back the underlying screen elements safely
+		DrawSprite(0, 0, OverlayDimBackdrop);
+
+		// Render the modal overlay popup dialogue block frame
+		DrawSprite(60, 100, OverlaySliderCard360x280);
+		DrawText(FontMain, "Ceiling Brightness", 90, 130, ColorBlack);
+
+		// Display current slider value via text tracking variable changes dynamically
+		DrawText(FontSmall, "Intensity:", 90, 170, ColorDarkGrey);
+		i32 brightnessValue = GetLightBrightness(GroundfloorBathroomCeilingLightId);
+		DrawValue(FontSmall, brightnessValue, UnitPercent, 200, 170, ColorDarkGrey);
+
+		// --- ADVANCED SLIDER DRAG GESTURE ---
+		// We track the slider bar boundaries. While Finger 1 slides horizontally inside it,
+		// the AST compiler translates the algebraic formula into postfix stack evaluation math.
+		// Target Variable = (Finger1X_Coordinate - Box_Left_Offset) * Scale_Multiplier / Effective_Box_Width
+		if (RegisterZone(90, 220, 300, 60, GestureSlide|GestureFinger1)) {
+			SetLightBrightness(GroundfloorBathroomCeilingLightId, (((Finger1X-90)*100)/300));
+		}
+
+		// --- CHORDED ANCHOR FINGER RELEASE FALLBACK ---
+		// Continuous boundary monitoring check. The exact microsecond the user lets go of
+		// Finger 0 (the primary finger holding down the original light button), snap back to standard grid view.
+		if (Finger0State == 0) {
+			UIMode = ModeStandardGrid;
+		}
+	}
+}
+
+// 888b     d888          d8b                .d88888b.                                     d8b
+// 8888b   d8888          Y8P               d88P" "Y88b                                    Y8P
+// 88888b.d88888                            888     888
+// 888Y88888P888  8888b.  888 88888b.       888     888 888  888  .d88b.  888d888 888  888 888  .d88b.  888  888  888
+// 888 Y888P 888     "88b 888 888 "88b      888     888 888  888 d8P  Y8b 888P"   888  888 888 d8P  Y8b 888  888  888
+// 888  Y8P  888 .d888888 888 888  888      888     888 Y88  88P 88888888 888     Y88  88P 888 88888888 888  888  888
+// 888   "   888 888  888 888 888  888      Y88b. .d88P  Y8bd8P  Y8b.     888      Y8bd8P  888 Y8b.     Y88b 888 d88P
+// 888       888 "Y888888 888 888  888       "Y88888P"    Y88P    "Y8888  888       Y88P   888  "Y8888   "Y8888888P"
+void PageOverviewFn() {
+	// 1. Establish a clean frame baseline by flooding the 480x480 canvas via hardware
+	ClearScreen(ColorCharcoal);
+
+	// 2. Global Top Border & Navigation Banner
+	DrawSprite(0, 0, BgCharcoalTopBannerId);
+	DrawText(FontMain, "Overview", 20, 15, ColorWhite);
+    DrawDate(FontSmall, 20, 60, ColorWhite);
+    DrawTime(FontSmall, 400, 60, ColorWhite);
+
+	// 3. STATE ROUTING LAYER A: Standard Operational Grid View
+	// 4 floors (4 row buttons, one for each floor):
+	//    - 2d floor     -> page with 2x2 grid [bathroom, stair way, master bedroom, bedroom]
+	//    - 1st floor    -> page with 2x3 grid [bathroom, stair way, living room, study room, washing room]
+	//    - ground floor -> page with 3x3 grid [entrance, bathroom, stair way, kitchen, dining room, living room, bedroom]
+	//    - basement     -> page with 2x2 grid [front room, stair way, back room]
+	// After pressing a floor you will be presented with a page to select the room.
+	// Then when pressing a room you will be presented with a page to control the lights in that room.
+	// You will be able to navigate back to the room selection page and then back to the floor selection page, you
+	// can do that by swiping from left to right on the screen, this will take you back to the previous page.
+
+}

@@ -18,6 +18,7 @@ tags/
 !*.zig
 
 !*.go
+!*.cova
 
 !*.cs
 !*.csproj
